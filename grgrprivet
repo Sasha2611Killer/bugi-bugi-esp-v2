@@ -1,5 +1,5 @@
 --// Made by Blissful#4992
---// Modified for Library-style usage with Name ESP from second script
+--// Modified for Library-style usage with correct Name ESP positioning
 
 local ESP = {}
 local ESP_Instances = {}
@@ -7,21 +7,24 @@ local ESP_Instances = {}
 --// Settings (can be modified after loading)
 ESP.Boxes = true
 ESP.Names = true
-ESP.ShowDistance = true -- Показывать расстояние
+ESP.ShowDistance = true
 ESP.Box_Color = Color3.fromRGB(0, 255, 50)
 ESP.Box_Thickness = 1.4
-ESP.Box_Transparency = 1 -- 1 Visible, 0 Not Visible
+ESP.Box_Transparency = 1
 ESP.Name_Color = Color3.fromRGB(255, 255, 255)
 ESP.Name_Size = 19
 ESP.Name_Center = true
 ESP.Name_Outline = true
-ESP.Name_Font = 2 -- 0 = System, 1 = Monospace, 2 = UI, 3 = Bold
-ESP.Distance_Offset = 20 -- Смещение расстояния под именем
-ESP.Autothickness = false -- Makes screen less encumbered
+ESP.Name_Font = 2
+ESP.BoxShift = CFrame.new(0, -1.5, 0) -- Смещение бокса как в оригинале
+ESP.BoxSize = Vector3.new(4, 6, 0) -- Размер бокса как в оригинале
+ESP.Distance_Offset = 14
+ESP.Autothickness = false
 ESP.Team_Check = false
 ESP.Team_Color_Enemy = Color3.fromRGB(227, 52, 52)
 ESP.Team_Color_Friendly = Color3.fromRGB(88, 217, 24)
-ESP.TeamMates = true -- Показывать тиммейтов
+ESP.TeamMates = true
+ESP.FaceCamera = false -- Поворачивать бокс лицом к камере
 
 --// Internal variables
 local workspace = game:GetService("Workspace")
@@ -30,7 +33,11 @@ local camera = workspace.CurrentCamera
 local players = game:GetService("Players")
 local runService = game:GetService("RunService")
 
---// Helper function to create new drawing objects
+--// Helper functions
+local function WorldToViewportPoint(point)
+    return camera:WorldToViewportPoint(point)
+end
+
 local function NewLine()
     local line = Drawing.new("Line")
     line.Visible = false
@@ -54,7 +61,7 @@ local function NewText()
     return text
 end
 
---// Team check functions from second script
+--// Team check functions
 local function GetTeam(p)
     return p and p.Team
 end
@@ -99,7 +106,6 @@ local function createESPForPlayer(plr)
                 
                 -- Team check
                 if not ESP.TeamMates and IsTeamMate(plr) then
-                    -- Hide if team mates are disabled
                     for i = 1, 12 do
                         instances["line"..i].Visible = false
                     end
@@ -111,29 +117,37 @@ local function createESPForPlayer(plr)
                 local rootPart = plr.Character.HumanoidRootPart
                 local head = plr.Character.Head
                 
-                -- Get the head position for name placement
-                local headPos = head.Position
-                local headScreenPos, headVisible = camera:WorldToViewportPoint(headPos)
+                -- Calculate CFrame with FaceCamera option (как в оригинале)
+                local cf = rootPart.CFrame
+                if ESP.FaceCamera then
+                    cf = CFrame.new(cf.p, camera.CFrame.p)
+                end
                 
-                -- Get root part position for box calculation
-                local rootScreenPos, rootVisible = camera:WorldToViewportPoint(rootPart.Position)
+                -- Apply BoxShift (как в оригинале)
+                cf = cf * ESP.BoxShift
                 
-                if headVisible or rootVisible then
-                    -- Calculate box size based on head size
-                    local Scale = head.Size.Y/2
-                    local Size = Vector3.new(2, 3, 1.5) * (Scale * 2)
-                    
-                    -- Calculate all 8 corners of the 3D box
-                    local Top1 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, Size.Y, -Size.Z)).p)
-                    local Top2 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, Size.Y, Size.Z)).p)
-                    local Top3 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, Size.Y, Size.Z)).p)
-                    local Top4 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, Size.Y, -Size.Z)).p)
-                    
-                    local Bottom1 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, -Size.Y, -Size.Z)).p)
-                    local Bottom2 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, -Size.Y, Size.Z)).p)
-                    local Bottom3 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, -Size.Y, Size.Z)).p)
-                    local Bottom4 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, -Size.Y, -Size.Z)).p)
-                    
+                -- Calculate positions for all box corners (как в оригинале)
+                local size = ESP.BoxSize
+                local locs = {
+                    TopLeft = cf * CFrame.new(size.X/2, size.Y/2, 0),
+                    TopRight = cf * CFrame.new(-size.X/2, size.Y/2, 0),
+                    BottomLeft = cf * CFrame.new(size.X/2, -size.Y/2, 0),
+                    BottomRight = cf * CFrame.new(-size.X/2, -size.Y/2, 0),
+                    TagPos = cf * CFrame.new(0, size.Y/2, 0),  -- Позиция для имени (сверху бокса)
+                    Torso = cf
+                }
+                
+                -- Convert all positions to screen coordinates
+                local TopLeft, Vis1 = WorldToViewportPoint(locs.TopLeft.p)
+                local TopRight, Vis2 = WorldToViewportPoint(locs.TopRight.p)
+                local BottomLeft, Vis3 = WorldToViewportPoint(locs.BottomLeft.p)
+                local BottomRight, Vis4 = WorldToViewportPoint(locs.BottomRight.p)
+                local TagPos, Vis5 = WorldToViewportPoint(locs.TagPos.p)
+                
+                -- Determine if any part is visible
+                local anyVisible = Vis1 or Vis2 or Vis3 or Vis4 or Vis5
+                
+                if anyVisible then
                     -- Determine colors based on team check
                     local boxColor = ESP.Box_Color
                     local nameColor = ESP.Name_Color
@@ -158,57 +172,41 @@ local function createESPForPlayer(plr)
                     -- Update box lines if enabled
                     if ESP.Boxes then
                         -- Top square
-                        instances.line1.From = Vector2.new(Top1.X, Top1.Y)
-                        instances.line1.To = Vector2.new(Top2.X, Top2.Y)
-                        instances.line2.From = Vector2.new(Top2.X, Top2.Y)
-                        instances.line2.To = Vector2.new(Top3.X, Top3.Y)
-                        instances.line3.From = Vector2.new(Top3.X, Top3.Y)
-                        instances.line3.To = Vector2.new(Top4.X, Top4.Y)
-                        instances.line4.From = Vector2.new(Top4.X, Top4.Y)
-                        instances.line4.To = Vector2.new(Top1.X, Top1.Y)
+                        instances.line1.From = Vector2.new(TopLeft.X, TopLeft.Y)
+                        instances.line1.To = Vector2.new(TopRight.X, TopRight.Y)
+                        instances.line2.From = Vector2.new(TopRight.X, TopRight.Y)
+                        instances.line2.To = Vector2.new(BottomRight.X, BottomRight.Y)
+                        instances.line3.From = Vector2.new(BottomRight.X, BottomRight.Y)
+                        instances.line3.To = Vector2.new(BottomLeft.X, BottomLeft.Y)
+                        instances.line4.From = Vector2.new(BottomLeft.X, BottomLeft.Y)
+                        instances.line4.To = Vector2.new(TopLeft.X, TopLeft.Y)
                         
-                        -- Bottom square
-                        instances.line5.From = Vector2.new(Bottom1.X, Bottom1.Y)
-                        instances.line5.To = Vector2.new(Bottom2.X, Bottom2.Y)
-                        instances.line6.From = Vector2.new(Bottom2.X, Bottom2.Y)
-                        instances.line6.To = Vector2.new(Bottom3.X, Bottom3.Y)
-                        instances.line7.From = Vector2.new(Bottom3.X, Bottom3.Y)
-                        instances.line7.To = Vector2.new(Bottom4.X, Bottom4.Y)
-                        instances.line8.From = Vector2.new(Bottom4.X, Bottom4.Y)
-                        instances.line8.To = Vector2.new(Bottom1.X, Bottom1.Y)
-                        
-                        -- Vertical lines
-                        instances.line9.From = Vector2.new(Bottom1.X, Bottom1.Y)
-                        instances.line9.To = Vector2.new(Top1.X, Top1.Y)
-                        instances.line10.From = Vector2.new(Bottom2.X, Bottom2.Y)
-                        instances.line10.To = Vector2.new(Top2.X, Top2.Y)
-                        instances.line11.From = Vector2.new(Bottom3.X, Bottom3.Y)
-                        instances.line11.To = Vector2.new(Top3.X, Top3.Y)
-                        instances.line12.From = Vector2.new(Bottom4.X, Bottom4.Y)
-                        instances.line12.To = Vector2.new(Top4.X, Top4.Y)
+                        -- Bottom square (для 3D эффекта, но можно отключить если не нужно)
+                        -- В оригинале они используют Quad, а мы оставим 2D прямоугольник
                         
                         -- Apply properties to all lines
-                        for i = 1, 12 do
+                        for i = 1, 4 do
                             local line = instances["line"..i]
                             line.Color = boxColor
                             line.Thickness = thickness
                             line.Transparency = ESP.Box_Transparency
-                            line.Visible = rootVisible -- Only show box if root part is visible
+                            line.Visible = true
+                        end
+                        
+                        -- Hide unused lines
+                        for i = 5, 12 do
+                            instances["line"..i].Visible = false
                         end
                     else
-                        -- Hide boxes if disabled
                         for i = 1, 12 do
                             instances["line"..i].Visible = false
                         end
                     end
                     
-                    -- Update name text if enabled and head is visible
-                    if ESP.Names and headVisible then
-                        -- Position name above head
-                        local nameY = headScreenPos.Y - 30 -- Position above head
-                        
-                        -- Name
-                        instances.nameText.Position = Vector2.new(headScreenPos.X, nameY)
+                    -- Update name text if enabled and tag position is visible
+                    if ESP.Names and Vis5 then
+                        -- Name (позиция из TagPos как в оригинале)
+                        instances.nameText.Position = Vector2.new(TagPos.X, TagPos.Y)
                         instances.nameText.Text = plr.Name
                         instances.nameText.Color = nameColor
                         instances.nameText.Size = ESP.Name_Size
@@ -217,10 +215,10 @@ local function createESPForPlayer(plr)
                         instances.nameText.Font = ESP.Name_Font
                         instances.nameText.Visible = true
                         
-                        -- Distance
+                        -- Distance (под именем как в оригинале)
                         if ESP.ShowDistance then
                             local distance = math.floor((camera.CFrame.p - rootPart.Position).Magnitude)
-                            instances.distanceText.Position = Vector2.new(headScreenPos.X, nameY + ESP.Distance_Offset)
+                            instances.distanceText.Position = Vector2.new(TagPos.X, TagPos.Y + ESP.Distance_Offset)
                             instances.distanceText.Text = distance .. "m"
                             instances.distanceText.Color = nameColor
                             instances.distanceText.Size = ESP.Name_Size - 2
@@ -237,7 +235,6 @@ local function createESPForPlayer(plr)
                     end
                     
                 else
-                    -- Hide everything if player is not visible
                     for i = 1, 12 do
                         instances["line"..i].Visible = false
                     end
@@ -245,14 +242,12 @@ local function createESPForPlayer(plr)
                     instances.distanceText.Visible = false
                 end
             else
-                -- Hide everything if player is invalid
                 for i = 1, 12 do
                     instances["line"..i].Visible = false
                 end
                 instances.nameText.Visible = false
                 instances.distanceText.Visible = false
                 
-                -- Disconnect if player is removed
                 if not players:FindFirstChild(plr.Name) then
                     connection:Disconnect()
                     ESP_Instances[plr] = nil
@@ -277,7 +272,6 @@ end)
 --// Handle players leaving
 players.PlayerRemoving:Connect(function(plr)
     if ESP_Instances[plr] then
-        -- Clean up drawing objects
         for _, instance in pairs(ESP_Instances[plr]) do
             instance:Remove()
         end
