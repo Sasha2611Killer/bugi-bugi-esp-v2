@@ -1,5 +1,5 @@
 --// Made by Blissful#4992
---// Modified for Library-style usage
+--// Modified for Library-style usage with Name ESP from second script
 
 local ESP = {}
 local ESP_Instances = {}
@@ -7,16 +7,22 @@ local ESP_Instances = {}
 --// Settings (can be modified after loading)
 ESP.Boxes = true
 ESP.Names = true
+ESP.ShowDistance = true -- Показывать расстояние
 ESP.Box_Color = Color3.fromRGB(0, 255, 50)
 ESP.Box_Thickness = 1.4
 ESP.Box_Transparency = 1 -- 1 Visible, 0 Not Visible
 ESP.Name_Color = Color3.fromRGB(255, 255, 255)
-ESP.Name_Size = 16
+ESP.Name_Size = 19
 ESP.Name_Center = true
+ESP.Name_Outline = true
+ESP.Name_Font = 2 -- 0 = System, 1 = Monospace, 2 = UI, 3 = Bold
+ESP.Distance_Offset = 14 -- Смещение расстояния под именем
+ESP.AttachShift = 1 -- Позиция имени (1 - сверху, 2 - центр и т.д.)
 ESP.Autothickness = false -- Makes screen less encumbered
 ESP.Team_Check = false
 ESP.Team_Color_Enemy = Color3.fromRGB(227, 52, 52)
 ESP.Team_Color_Friendly = Color3.fromRGB(88, 217, 24)
+ESP.TeamMates = true -- Показывать тиммейтов
 
 --// Internal variables
 local workspace = game:GetService("Workspace")
@@ -24,7 +30,6 @@ local player = game:GetService("Players").LocalPlayer
 local camera = workspace.CurrentCamera
 local players = game:GetService("Players")
 local runService = game:GetService("RunService")
-local userInputService = game:GetService("UserInputService")
 
 --// Helper function to create new drawing objects
 local function NewLine()
@@ -45,9 +50,23 @@ local function NewText()
     text.Color = ESP.Name_Color
     text.Size = ESP.Name_Size
     text.Center = ESP.Name_Center
-    text.Outline = true
-    text.Font = 2 -- UI Font
+    text.Outline = ESP.Name_Outline
+    text.Font = ESP.Name_Font
     return text
+end
+
+--// Team check functions from second script
+local function GetTeam(p)
+    return p and p.Team
+end
+
+local function IsTeamMate(p)
+    return GetTeam(p) == GetTeam(player)
+end
+
+local function GetColor(obj)
+    local p = players:GetPlayerFromCharacter(obj)
+    return p and ESP.Team_Check and p.Team and (IsTeamMate(p) and ESP.Team_Color_Friendly or ESP.Team_Color_Enemy) or ESP.Name_Color
 end
 
 --// Main ESP function for each player
@@ -70,7 +89,9 @@ local function createESPForPlayer(plr)
         line11 = NewLine(),
         line12 = NewLine(),
         -- Name text
-        nameText = NewText()
+        nameText = NewText(),
+        -- Distance text
+        distanceText = NewText()
     }
     
     ESP_Instances[plr] = instances
@@ -79,8 +100,19 @@ local function createESPForPlayer(plr)
     local function updateESP()
         local connection
         connection = runService.RenderStepped:Connect(function()
-            -- Check if ESP is enabled and player is valid
+            -- Check if player is valid
             if plr.Character and plr.Character:FindFirstChild("Humanoid") and plr.Character:FindFirstChild("HumanoidRootPart") and plr.Character:FindFirstChild("Head") and plr.Character.Humanoid.Health > 0 then
+                
+                -- Team check
+                if not ESP.TeamMates and IsTeamMate(plr) then
+                    -- Hide if team mates are disabled
+                    for i = 1, 12 do
+                        instances["line"..i].Visible = false
+                    end
+                    instances.nameText.Visible = false
+                    instances.distanceText.Visible = false
+                    return
+                end
                 
                 local rootPart = plr.Character.HumanoidRootPart
                 local head = plr.Character.Head
@@ -102,12 +134,15 @@ local function createESPForPlayer(plr)
                     local Bottom3 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, -Size.Y, Size.Z)).p)
                     local Bottom4 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, -Size.Y, -Size.Z)).p)
                     
+                    -- Calculate position for name (above the head)
+                    local TagPos = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(0, Size.Y + 0.5, 0)).p)
+                    
                     -- Determine colors based on team check
                     local boxColor = ESP.Box_Color
                     local nameColor = ESP.Name_Color
                     
                     if ESP.Team_Check then
-                        if plr.TeamColor == player.TeamColor then
+                        if IsTeamMate(plr) then
                             boxColor = ESP.Team_Color_Friendly
                             nameColor = ESP.Team_Color_Friendly
                         else
@@ -172,15 +207,33 @@ local function createESPForPlayer(plr)
                     
                     -- Update name text if enabled
                     if ESP.Names then
-                        local namePos = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(0, Size.Y + 0.5, 0)).p)
-                        instances.nameText.Position = Vector2.new(namePos.X, namePos.Y)
+                        -- Name
+                        instances.nameText.Position = Vector2.new(TagPos.X, TagPos.Y)
                         instances.nameText.Text = plr.Name
                         instances.nameText.Color = nameColor
                         instances.nameText.Size = ESP.Name_Size
                         instances.nameText.Center = ESP.Name_Center
+                        instances.nameText.Outline = ESP.Name_Outline
+                        instances.nameText.Font = ESP.Name_Font
                         instances.nameText.Visible = true
+                        
+                        -- Distance
+                        if ESP.ShowDistance then
+                            local distance = math.floor((camera.CFrame.p - rootPart.Position).Magnitude)
+                            instances.distanceText.Position = Vector2.new(TagPos.X, TagPos.Y + ESP.Distance_Offset)
+                            instances.distanceText.Text = distance .. "m away"
+                            instances.distanceText.Color = nameColor
+                            instances.distanceText.Size = ESP.Name_Size - 2
+                            instances.distanceText.Center = ESP.Name_Center
+                            instances.distanceText.Outline = ESP.Name_Outline
+                            instances.distanceText.Font = ESP.Name_Font
+                            instances.distanceText.Visible = true
+                        else
+                            instances.distanceText.Visible = false
+                        end
                     else
                         instances.nameText.Visible = false
+                        instances.distanceText.Visible = false
                     end
                     
                 else
@@ -189,6 +242,7 @@ local function createESPForPlayer(plr)
                         instances["line"..i].Visible = false
                     end
                     instances.nameText.Visible = false
+                    instances.distanceText.Visible = false
                 end
             else
                 -- Hide everything if player is invalid
@@ -196,6 +250,7 @@ local function createESPForPlayer(plr)
                     instances["line"..i].Visible = false
                 end
                 instances.nameText.Visible = false
+                instances.distanceText.Visible = false
                 
                 -- Disconnect if player is removed
                 if not players:FindFirstChild(plr.Name) then
