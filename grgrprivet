@@ -1,270 +1,233 @@
---// Made by Blissful#4992
---// Modified for Library-style usage with correct Name ESP positioning
-
-local ESP = {}
-local ESP_Instances = {}
-
---// Settings (can be modified after loading)
-ESP.Boxes = true
-ESP.Names = true
-ESP.ShowDistance = true
-ESP.Box_Color = Color3.fromRGB(0, 255, 50)
-ESP.Box_Thickness = 1.4
-ESP.Box_Transparency = 1
-ESP.Name_Color = Color3.fromRGB(255, 255, 255)
-ESP.Name_Size = 19
-ESP.Name_Center = true
-ESP.Name_Outline = true
-ESP.Name_Font = 2
-ESP.BoxShift = CFrame.new(0, -1.5, 0)
-ESP.BoxSize = Vector3.new(4, 6, 0)
-ESP.Distance_Offset = 14
-ESP.Autothickness = false
-ESP.Team_Check = false
-ESP.Team_Color_Enemy = Color3.fromRGB(227, 52, 52)
-ESP.Team_Color_Friendly = Color3.fromRGB(88, 217, 24)
-ESP.TeamMates = true
-ESP.FaceCamera = false
-
---// Internal variables
+--// Made by Blissful#4992 (Modified with ESP table syntax)
+--// Locals:
 local workspace = game:GetService("Workspace")
 local player = game:GetService("Players").LocalPlayer
 local camera = workspace.CurrentCamera
-local players = game:GetService("Players")
-local runService = game:GetService("RunService")
 
---// Helper functions - ВАЖНО: используем правильный синтаксис как в оригинале
-local function WorldToViewportPoint(point)
-    -- В оригинале: WorldToViewportPoint(cam, point)
-    -- В Luau: camera:WorldToViewportPoint(point)
-    local vector, visible = camera:WorldToViewportPoint(point)
-    return vector, visible
+--// ESP Table with Settings
+local ESP = {
+    Enabled = true,
+    Boxes = true,
+    Names = true,
+    Tracers = false,
+    TeamCheck = false,
+    Autothickness = false,
+    
+    -- Visual Settings
+    BoxColor = Color3.fromRGB(0, 255, 50),
+    BoxThickness = 1.4,
+    BoxTransparency = 1,
+    
+    TracerColor = Color3.fromRGB(0, 255, 50),
+    TracerThickness = 1.4,
+    TracerTransparency = 1,
+    
+    NameColor = Color3.fromRGB(255, 255, 255),
+    NameSize = 16,
+    DistanceColor = Color3.fromRGB(200, 200, 200),
+    
+    -- Team Colors
+    TeamColorEnemy = Color3.fromRGB(227, 52, 52),
+    TeamColorFriend = Color3.fromRGB(88, 217, 24)
+}
+
+--// Helper function for team check
+local function IsEnemy(plr)
+    if plr == player then return false end
+    local localTeam = player:GetAttribute("Team")
+    local playerTeam = plr:GetAttribute("Team")
+    if not localTeam or not playerTeam then return false end
+    return localTeam ~= playerTeam
 end
 
+--// Helper Functions
 local function NewLine()
     local line = Drawing.new("Line")
     line.Visible = false
     line.From = Vector2.new(0, 0)
     line.To = Vector2.new(1, 1)
-    line.Color = ESP.Box_Color
-    line.Thickness = ESP.Box_Thickness
-    line.Transparency = ESP.Box_Transparency
+    line.Color = ESP.BoxColor
+    line.Thickness = ESP.BoxThickness
+    line.Transparency = ESP.BoxTransparency
     return line
 end
 
 local function NewText()
     local text = Drawing.new("Text")
     text.Visible = false
-    text.Text = ""
-    text.Color = ESP.Name_Color
-    text.Size = ESP.Name_Size
-    text.Center = ESP.Name_Center
-    text.Outline = ESP.Name_Outline
-    text.Font = ESP.Name_Font
+    text.Center = true
+    text.Outline = true
+    text.Size = ESP.NameSize
+    text.Color = ESP.NameColor
     return text
 end
 
---// Team check functions
-local function GetTeam(p)
-    return p and p.Team
-end
-
-local function IsTeamMate(p)
-    return GetTeam(p) == GetTeam(player)
-end
-
---// Main ESP function for each player
-local function createESPForPlayer(plr)
-    if plr == player then return end
-    
-    --// Create drawing objects
-    local instances = {
-        -- Lines for 2D box (упрощаем до 4 линий как в оригинале)
+--// Main Function to create ESP for a player
+local function CreateESPForPlayer(targetPlayer)
+    --// Lines for 3D box (12)
+    local lines = {
         line1 = NewLine(),
         line2 = NewLine(),
         line3 = NewLine(),
         line4 = NewLine(),
-        -- Name text
-        nameText = NewText(),
-        -- Distance text
-        distanceText = NewText()
+        line5 = NewLine(),
+        line6 = NewLine(),
+        line7 = NewLine(),
+        line8 = NewLine(),
+        line9 = NewLine(),
+        line10 = NewLine(),
+        line11 = NewLine(),
+        line12 = NewLine(),
+        Tracer = NewLine(),
+        NameText = NewText(),
+        DistanceText = NewText()
     }
     
-    ESP_Instances[plr] = instances
-    
-    --// Update function for render loop
-    local function updateESP()
+    -- Set tracer properties
+    lines.Tracer.Color = ESP.TracerColor
+    lines.Tracer.Thickness = ESP.TracerThickness
+    lines.Tracer.Transparency = ESP.TracerTransparency
+
+    --// Updates ESP in render loop
+    local function UpdateESP()
         local connection
-        connection = runService.RenderStepped:Connect(function()
+        connection = game:GetService("RunService").RenderStepped:Connect(function()
+            if not ESP.Enabled then
+                for _, line in pairs(lines) do
+                    line.Visible = false
+                end
+                return
+            end
+            
             -- Check if player is valid
-            if plr.Character and plr.Character:FindFirstChild("Humanoid") and plr.Character:FindFirstChild("HumanoidRootPart") and plr.Character:FindFirstChild("Head") and plr.Character.Humanoid.Health > 0 then
+            if targetPlayer.Character and targetPlayer.Character:FindFirstChild("Humanoid") and 
+               targetPlayer.Character:FindFirstChild("HumanoidRootPart") and 
+               targetPlayer.Name ~= player.Name and 
+               targetPlayer.Character.Humanoid.Health > 0 and 
+               targetPlayer.Character:FindFirstChild("Head") then
                 
-                -- Team check
-                if not ESP.TeamMates and IsTeamMate(plr) then
-                    for i = 1, 4 do
-                        instances["line"..i].Visible = false
+                local pos, vis = camera:WorldToViewportPoint(targetPlayer.Character.HumanoidRootPart.Position)
+                if vis then
+                    local Scale = targetPlayer.Character.Head.Size.Y/2
+                    local Size = Vector3.new(2, 3, 1.5) * (Scale * 2)
+                    
+                    -- Calculate box corners
+                    local Top1 = camera:WorldToViewportPoint((targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(-Size.X, Size.Y, -Size.Z)).p)
+                    local Top2 = camera:WorldToViewportPoint((targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(-Size.X, Size.Y, Size.Z)).p)
+                    local Top3 = camera:WorldToViewportPoint((targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(Size.X, Size.Y, Size.Z)).p)
+                    local Top4 = camera:WorldToViewportPoint((targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(Size.X, Size.Y, -Size.Z)).p)
+                    
+                    local Bottom1 = camera:WorldToViewportPoint((targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(-Size.X, -Size.Y, -Size.Z)).p)
+                    local Bottom2 = camera:WorldToViewportPoint((targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(-Size.X, -Size.Y, Size.Z)).p)
+                    local Bottom3 = camera:WorldToViewportPoint((targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(Size.X, -Size.Y, Size.Z)).p)
+                    local Bottom4 = camera:WorldToViewportPoint((targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(Size.X, -Size.Y, -Size.Z)).p)
+                    
+                    -- Determine color based on team
+                    local currentColor = ESP.BoxColor
+                    if ESP.TeamCheck then
+                        if IsEnemy(targetPlayer) then
+                            currentColor = ESP.TeamColorEnemy
+                        else
+                            currentColor = ESP.TeamColorFriend
+                        end
                     end
-                    instances.nameText.Visible = false
-                    instances.distanceText.Visible = false
-                    return
-                end
-                
-                local rootPart = plr.Character.HumanoidRootPart
-                
-                -- Calculate CFrame with FaceCamera option
-                local cf = rootPart.CFrame
-                if ESP.FaceCamera then
-                    cf = CFrame.new(cf.p, camera.CFrame.p)
-                end
-                
-                -- Apply BoxShift
-                cf = cf * ESP.BoxShift
-                
-                -- Calculate positions for box corners
-                local size = ESP.BoxSize
-                local locs = {
-                    -- Для прямоугольника используем 4 угла
-                    TopLeft = cf * CFrame.new(-size.X/2, size.Y/2, 0),
-                    TopRight = cf * CFrame.new(size.X/2, size.Y/2, 0),
-                    BottomLeft = cf * CFrame.new(-size.X/2, -size.Y/2, 0),
-                    BottomRight = cf * CFrame.new(size.X/2, -size.Y/2, 0),
-                    -- Позиция для имени (над боксом)
-                    TagPos = cf * CFrame.new(0, size.Y/2 + 0.5, 0)
-                }
-                
-                -- Convert all positions to screen coordinates
-                local TopLeft, Vis1 = WorldToViewportPoint(locs.TopLeft.p)
-                local TopRight, Vis2 = WorldToViewportPoint(locs.TopRight.p)
-                local BottomLeft, Vis3 = WorldToViewportPoint(locs.BottomLeft.p)
-                local BottomRight, Vis4 = WorldToViewportPoint(locs.BottomRight.p)
-                local TagPos, Vis5 = WorldToViewportPoint(locs.TagPos.p)
-                
-                -- Определяем цвета
-                local boxColor = ESP.Box_Color
-                local nameColor = ESP.Name_Color
-                
-                if ESP.Team_Check then
-                    if IsTeamMate(plr) then
-                        boxColor = ESP.Team_Color_Friendly
-                        nameColor = ESP.Team_Color_Friendly
-                    else
-                        boxColor = ESP.Team_Color_Enemy
-                        nameColor = ESP.Team_Color_Enemy
+                    
+                    -- Update box lines (if enabled)
+                    if ESP.Boxes then
+                        -- Top square
+                        lines.line1.From = Vector2.new(Top1.X, Top1.Y); lines.line1.To = Vector2.new(Top2.X, Top2.Y)
+                        lines.line2.From = Vector2.new(Top2.X, Top2.Y); lines.line2.To = Vector2.new(Top3.X, Top3.Y)
+                        lines.line3.From = Vector2.new(Top3.X, Top3.Y); lines.line3.To = Vector2.new(Top4.X, Top4.Y)
+                        lines.line4.From = Vector2.new(Top4.X, Top4.Y); lines.line4.To = Vector2.new(Top1.X, Top1.Y)
+                        
+                        -- Bottom square
+                        lines.line5.From = Vector2.new(Bottom1.X, Bottom1.Y); lines.line5.To = Vector2.new(Bottom2.X, Bottom2.Y)
+                        lines.line6.From = Vector2.new(Bottom2.X, Bottom2.Y); lines.line6.To = Vector2.new(Bottom3.X, Bottom3.Y)
+                        lines.line7.From = Vector2.new(Bottom3.X, Bottom3.Y); lines.line7.To = Vector2.new(Bottom4.X, Bottom4.Y)
+                        lines.line8.From = Vector2.new(Bottom4.X, Bottom4.Y); lines.line8.To = Vector2.new(Bottom1.X, Bottom1.Y)
+                        
+                        -- Vertical lines
+                        lines.line9.From = Vector2.new(Bottom1.X, Bottom1.Y); lines.line9.To = Vector2.new(Top1.X, Top1.Y)
+                        lines.line10.From = Vector2.new(Bottom2.X, Bottom2.Y); lines.line10.To = Vector2.new(Top2.X, Top2.Y)
+                        lines.line11.From = Vector2.new(Bottom3.X, Bottom3.Y); lines.line11.To = Vector2.new(Top3.X, Top3.Y)
+                        lines.line12.From = Vector2.new(Bottom4.X, Bottom4.Y); lines.line12.To = Vector2.new(Top4.X, Top4.Y)
+                        
+                        -- Set colors and visibility
+                        for i = 1, 12 do
+                            lines["line"..i].Color = currentColor
+                            lines["line"..i].Visible = true
+                        end
                     end
-                end
-                
-                -- Определяем толщину
-                local thickness = ESP.Box_Thickness
-                if ESP.Autothickness and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-                    local distance = (player.Character.HumanoidRootPart.Position - rootPart.Position).Magnitude
-                    thickness = math.clamp(1/distance * 100, 0.1, 4)
-                end
-                
-                -- Обновляем бокс если виден
-                if ESP.Boxes and (Vis1 or Vis2 or Vis3 or Vis4) then
-                    -- Рисуем прямоугольник (4 линии)
-                    instances.line1.From = Vector2.new(TopLeft.X, TopLeft.Y)
-                    instances.line1.To = Vector2.new(TopRight.X, TopRight.Y)
-                    instances.line1.Color = boxColor
-                    instances.line1.Thickness = thickness
-                    instances.line1.Transparency = ESP.Box_Transparency
-                    instances.line1.Visible = true
                     
-                    instances.line2.From = Vector2.new(TopRight.X, TopRight.Y)
-                    instances.line2.To = Vector2.new(BottomRight.X, BottomRight.Y)
-                    instances.line2.Color = boxColor
-                    instances.line2.Thickness = thickness
-                    instances.line2.Transparency = ESP.Box_Transparency
-                    instances.line2.Visible = true
+                    -- Update tracer (if enabled)
+                    if ESP.Tracers then
+                        local trace = camera:WorldToViewportPoint((targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, -Size.Y, 0)).p)
+                        lines.Tracer.From = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y)
+                        lines.Tracer.To = Vector2.new(trace.X, trace.Y)
+                        lines.Tracer.Color = currentColor
+                        lines.Tracer.Visible = true
+                    end
                     
-                    instances.line3.From = Vector2.new(BottomRight.X, BottomRight.Y)
-                    instances.line3.To = Vector2.new(BottomLeft.X, BottomLeft.Y)
-                    instances.line3.Color = boxColor
-                    instances.line3.Thickness = thickness
-                    instances.line3.Transparency = ESP.Box_Transparency
-                    instances.line3.Visible = true
+                    -- Update name text (if enabled)
+                    if ESP.Names then
+                        local headPos = camera:WorldToViewportPoint(targetPlayer.Character.Head.Position + Vector3.new(0, 1.5, 0))
+                        lines.NameText.Position = Vector2.new(headPos.X, headPos.Y - 30)
+                        lines.NameText.Text = targetPlayer.Name
+                        lines.NameText.Color = currentColor
+                        lines.NameText.Visible = true
+                        
+                        -- Distance text
+                        local distance = (player.Character.HumanoidRootPart.Position - targetPlayer.Character.HumanoidRootPart.Position).magnitude
+                        lines.DistanceText.Position = Vector2.new(headPos.X, headPos.Y - 15)
+                        lines.DistanceText.Text = math.floor(distance) .. "m"
+                        lines.DistanceText.Color = ESP.DistanceColor
+                        lines.DistanceText.Visible = true
+                    end
                     
-                    instances.line4.From = Vector2.new(BottomLeft.X, BottomLeft.Y)
-                    instances.line4.To = Vector2.new(TopLeft.X, TopLeft.Y)
-                    instances.line4.Color = boxColor
-                    instances.line4.Thickness = thickness
-                    instances.line4.Transparency = ESP.Box_Transparency
-                    instances.line4.Visible = true
+                    -- Apply autothickness
+                    if ESP.Autothickness then
+                        local distance = (player.Character.HumanoidRootPart.Position - targetPlayer.Character.HumanoidRootPart.Position).magnitude
+                        local value = math.clamp(1/distance*100, 0.1, 4)
+                        for i = 1, 12 do
+                            lines["line"..i].Thickness = value
+                        end
+                        lines.Tracer.Thickness = value
+                    end
+                    
                 else
-                    for i = 1, 4 do
-                        instances["line"..i].Visible = false
+                    -- Player not visible on screen
+                    for _, line in pairs(lines) do
+                        line.Visible = false
                     end
                 end
-                
-                -- Обновляем имя если видна позиция для тега
-                if ESP.Names and Vis5 then
-                    -- Отладочный вывод
-                    -- print("TagPos:", TagPos.X, TagPos.Y, "Visible:", Vis5)
-                    
-                    instances.nameText.Position = Vector2.new(TagPos.X, TagPos.Y)
-                    instances.nameText.Text = plr.Name
-                    instances.nameText.Color = nameColor
-                    instances.nameText.Size = ESP.Name_Size
-                    instances.nameText.Center = ESP.Name_Center
-                    instances.nameText.Outline = ESP.Name_Outline
-                    instances.nameText.Font = ESP.Name_Font
-                    instances.nameText.Visible = true
-                    
-                    if ESP.ShowDistance then
-                        local distance = math.floor((camera.CFrame.p - rootPart.Position).Magnitude)
-                        instances.distanceText.Position = Vector2.new(TagPos.X, TagPos.Y + ESP.Distance_Offset)
-                        instances.distanceText.Text = distance .. "m"
-                        instances.distanceText.Color = nameColor
-                        instances.distanceText.Size = ESP.Name_Size - 2
-                        instances.distanceText.Center = ESP.Name_Center
-                        instances.distanceText.Outline = ESP.Name_Outline
-                        instances.distanceText.Font = ESP.Name_Font
-                        instances.distanceText.Visible = true
-                    else
-                        instances.distanceText.Visible = false
-                    end
-                else
-                    instances.nameText.Visible = false
-                    instances.distanceText.Visible = false
-                end
-                
             else
-                for i = 1, 4 do
-                    instances["line"..i].Visible = false
+                -- Player invalid
+                for _, line in pairs(lines) do
+                    line.Visible = false
                 end
-                instances.nameText.Visible = false
-                instances.distanceText.Visible = false
-                
-                if not players:FindFirstChild(plr.Name) then
+                if game.Players:FindFirstChild(targetPlayer.Name) == nil then
                     connection:Disconnect()
-                    ESP_Instances[plr] = nil
                 end
             end
         end)
     end
     
-    coroutine.wrap(updateESP)()
+    coroutine.wrap(UpdateESP)()
 end
 
---// Initialize ESP for existing players
-for _, plr in pairs(players:GetPlayers()) do
-    createESPForPlayer(plr)
+--// Initialize for existing players
+for _, v in pairs(game.Players:GetPlayers()) do
+    if v ~= player then
+        CreateESPForPlayer(v)
+    end
 end
 
---// Handle new players joining
-players.PlayerAdded:Connect(function(plr)
-    createESPForPlayer(plr)
-end)
-
---// Handle players leaving
-players.PlayerRemoving:Connect(function(plr)
-    if ESP_Instances[plr] then
-        for _, instance in pairs(ESP_Instances[plr]) do
-            instance:Remove()
-        end
-        ESP_Instances[plr] = nil
+--// Handle new players
+game.Players.PlayerAdded:Connect(function(newplr)
+    if newplr ~= player then
+        CreateESPForPlayer(newplr)
     end
 end)
 
---// Return the ESP table for external use
+--// Return ESP table for external use
 return ESP
