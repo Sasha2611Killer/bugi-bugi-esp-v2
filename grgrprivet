@@ -1,12 +1,12 @@
---// Made by Blissful#4992 (Fully Fixed Version - No Flickering)
+--// Made by Blissful#4992 (ULTIMATE FIXED VERSION)
 --// Locals:
 local workspace = game:GetService("Workspace")
 local player = game:GetService("Players").LocalPlayer
 local camera = workspace.CurrentCamera
 local runService = game:GetService("RunService")
 
---// ESP Table with Settings
-local ESP = {
+--// ДЕЛАЕМ ESP ГЛОБАЛЬНЫМ
+_G.ESP = {
     Enabled = true,
     Boxes = true,
     Names = true,
@@ -29,46 +29,61 @@ local ESP = {
     
     -- Team Colors
     TeamColorEnemy = Color3.fromRGB(227, 52, 52),
-    TeamColorFriend = Color3.fromRGB(88, 217, 24)
+    TeamColorFriend = Color3.fromRGB(88, 217, 24),
+    
+    -- Хранилище линий
+    Lines = {}
 }
+
+local ESP = _G.ESP
 
 --// Helper function for team check
 local function IsEnemy(plr)
     if plr == player then return false end
-    local localTeam = player:GetAttribute("Team")
-    local playerTeam = plr:GetAttribute("Team")
-    if not localTeam or not playerTeam then return false end
+    local success, localTeam = pcall(function() return player:GetAttribute("Team") end)
+    local success2, playerTeam = pcall(function() return plr:GetAttribute("Team") end)
+    if not success or not success2 or not localTeam or not playerTeam then return false end
     return localTeam ~= playerTeam
 end
 
---// Helper Functions
+--// Helper Functions с защитой от ошибок
 local function NewLine()
-    local line = Drawing.new("Line")
-    line.Visible = false
-    line.From = Vector2.new(0, 0)
-    line.To = Vector2.new(1, 1)
-    line.Color = ESP.BoxColor
-    line.Thickness = ESP.BoxThickness
-    line.Transparency = 1
-    return line
+    local success, line = pcall(function()
+        local l = Drawing.new("Line")
+        l.Visible = false
+        l.From = Vector2.new(0, 0)
+        l.To = Vector2.new(1, 1)
+        l.Color = ESP.BoxColor
+        l.Thickness = ESP.BoxThickness
+        l.Transparency = 1
+        return l
+    end)
+    return success and line or nil
 end
 
 local function NewText()
-    local text = Drawing.new("Text")
-    text.Visible = false
-    text.Center = true
-    text.Outline = true
-    text.Size = ESP.NameSize
-    text.Color = ESP.NameColor
-    text.Transparency = 1
-    return text
+    local success, text = pcall(function()
+        local t = Drawing.new("Text")
+        t.Visible = false
+        t.Center = true
+        t.Outline = true
+        t.Size = ESP.NameSize
+        t.Color = ESP.NameColor
+        t.Transparency = 1
+        return t
+    end)
+    return success and text or nil
 end
-
---// Store all connections for cleanup
-local connections = {}
 
 --// Main Function to create ESP for a player
 local function CreateESPForPlayer(targetPlayer)
+    -- Проверяем поддержку Drawing
+    local success, _ = pcall(Drawing.new, "Line")
+    if not success then
+        warn("Drawing is not supported!")
+        return
+    end
+    
     --// Lines for 3D box (12)
     local lines = {
         line1 = NewLine(),
@@ -88,209 +103,231 @@ local function CreateESPForPlayer(targetPlayer)
         DistanceText = NewText()
     }
     
+    -- Проверяем, все ли линии создались
+    for name, line in pairs(lines) do
+        if not line then
+            warn("Failed to create line: " .. name)
+            return
+        end
+    end
+    
+    -- Сохраняем линии в глобальное хранилище
+    ESP.Lines[targetPlayer] = lines
+    
     -- Set tracer properties
-    lines.Tracer.Color = ESP.TracerColor
-    lines.Tracer.Thickness = ESP.TracerThickness
-    lines.Tracer.Transparency = 1
+    if lines.Tracer then
+        lines.Tracer.Color = ESP.TracerColor
+        lines.Tracer.Thickness = ESP.TracerThickness
+        lines.Tracer.Transparency = 1
+    end
 
     --// Updates ESP in render loop
     local connection
     connection = runService.RenderStepped:Connect(function()
-        -- Проверяем включен ли ESP
-        if not ESP.Enabled or not targetPlayer then
-            for _, line in pairs(lines) do
-                line.Visible = false
+        -- Защита от ошибок
+        local success, err = pcall(function()
+            -- Проверяем включен ли ESP
+            if not ESP.Enabled or not targetPlayer then
+                for _, line in pairs(lines) do
+                    if line then line.Visible = false end
+                end
+                return
             end
-            return
-        end
-        
-        -- Проверяем валидность игрока и его персонажа
-        local character = targetPlayer.Character
-        if not character then
-            for _, line in pairs(lines) do
-                line.Visible = false
+            
+            -- Проверяем валидность игрока
+            local character = targetPlayer.Character
+            if not character then
+                for _, line in pairs(lines) do
+                    if line then line.Visible = false end
+                end
+                return
             end
-            return
-        end
-        
-        -- Проверяем необходимые части
-        local humanoid = character:FindFirstChild("Humanoid")
-        local rootPart = character:FindFirstChild("HumanoidRootPart")
-        local head = character:FindFirstChild("Head")
-        
-        -- Проверяем своего персонажа
-        local myCharacter = player.Character
-        local myRoot = myCharacter and myCharacter:FindFirstChild("HumanoidRootPart")
-        
-        if not humanoid or not rootPart or not head or targetPlayer == player then
-            for _, line in pairs(lines) do
-                line.Visible = false
+            
+            -- Получаем части с защитой
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            local rootPart = character:FindFirstChild("HumanoidRootPart")
+            local head = character:FindFirstChild("Head")
+            
+            -- Проверяем своего персонажа
+            local myCharacter = player.Character
+            local myRoot = myCharacter and myCharacter:FindFirstChild("HumanoidRootPart")
+            
+            -- Если чего-то не хватает, не рисуем
+            if not humanoid or not rootPart or not head or targetPlayer == player then
+                for _, line in pairs(lines) do
+                    if line then line.Visible = false end
+                end
+                return
             end
-            return
-        end
-        
-        -- Проверяем жив ли игрок (более надежная проверка)
-        local isAlive = humanoid.Health > 0 and humanoid:GetState() ~= Enum.HumanoidStateType.Dead
-        if not isAlive then
-            for _, line in pairs(lines) do
-                line.Visible = false
+            
+            -- Проверяем жив ли игрок
+            if humanoid.Health <= 0 then
+                for _, line in pairs(lines) do
+                    if line then line.Visible = false end
+                end
+                return
             end
-            return
-        end
-        
-        -- Всегда пытаемся получить позицию на экране, даже если игрок не в кадре
-        local pos = camera:WorldToViewportPoint(rootPart.Position)
-        
-        -- Проверяем, находится ли точка в пределах экрана
-        local onScreen = pos.Z > 0 and pos.X > 0 and pos.X < camera.ViewportSize.X and pos.Y > 0 and pos.Y < camera.ViewportSize.Y
-        
-        -- Если игрок слишком далеко за экраном, не рисуем
-        if pos.Z < 0 or math.abs(pos.Z) > 1000 then
-            for _, line in pairs(lines) do
-                line.Visible = false
+            
+            -- Получаем позицию на экране
+            local pos = camera:WorldToViewportPoint(rootPart.Position)
+            
+            -- Если игрок слишком далеко или сзади, не рисуем
+            if pos.Z < 1 then
+                for _, line in pairs(lines) do
+                    if line then line.Visible = false end
+                end
+                return
             end
-            return
-        end
-        
-        -- Вычисляем размер бокса
-        local Scale = head.Size.Y/2
-        local Size = Vector3.new(2, 3, 1.5) * (Scale * 2)
-        
-        -- Всегда вычисляем углы бокса, даже если игрок не в кадре
-        local Top1 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, Size.Y, -Size.Z)).p)
-        local Top2 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, Size.Y, Size.Z)).p)
-        local Top3 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, Size.Y, Size.Z)).p)
-        local Top4 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, Size.Y, -Size.Z)).p)
-        
-        local Bottom1 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, -Size.Y, -Size.Z)).p)
-        local Bottom2 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, -Size.Y, Size.Z)).p)
-        local Bottom3 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, -Size.Y, Size.Z)).p)
-        local Bottom4 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, -Size.Y, -Size.Z)).p)
-        
-        -- Определяем цвет на основе команды
-        local currentColor = ESP.BoxColor
-        if ESP.TeamCheck then
-            if IsEnemy(targetPlayer) then
-                currentColor = ESP.TeamColorEnemy
+            
+            -- Проверяем, на экране ли игрок
+            local onScreen = pos.X > 0 and pos.X < camera.ViewportSize.X and 
+                            pos.Y > 0 and pos.Y < camera.ViewportSize.Y
+            
+            -- Вычисляем размер бокса
+            local Scale = head.Size.Y/2
+            local Size = Vector3.new(2, 3, 1.5) * (Scale * 2)
+            
+            -- Вычисляем углы бокса
+            local Top1 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, Size.Y, -Size.Z)).p)
+            local Top2 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, Size.Y, Size.Z)).p)
+            local Top3 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, Size.Y, Size.Z)).p)
+            local Top4 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, Size.Y, -Size.Z)).p)
+            
+            local Bottom1 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, -Size.Y, -Size.Z)).p)
+            local Bottom2 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, -Size.Y, Size.Z)).p)
+            local Bottom3 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, -Size.Y, Size.Z)).p)
+            local Bottom4 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, -Size.Y, -Size.Z)).p)
+            
+            -- Определяем цвет
+            local currentColor = ESP.BoxColor
+            if ESP.TeamCheck then
+                if IsEnemy(targetPlayer) then
+                    currentColor = ESP.TeamColorEnemy
+                else
+                    currentColor = ESP.TeamColorFriend
+                end
+            end
+            
+            -- Обновляем бокс
+            if ESP.Boxes and onScreen then
+                -- Top square
+                lines.line1.From = Vector2.new(Top1.X, Top1.Y); lines.line1.To = Vector2.new(Top2.X, Top2.Y)
+                lines.line2.From = Vector2.new(Top2.X, Top2.Y); lines.line2.To = Vector2.new(Top3.X, Top3.Y)
+                lines.line3.From = Vector2.new(Top3.X, Top3.Y); lines.line3.To = Vector2.new(Top4.X, Top4.Y)
+                lines.line4.From = Vector2.new(Top4.X, Top4.Y); lines.line4.To = Vector2.new(Top1.X, Top1.Y)
+                
+                -- Bottom square
+                lines.line5.From = Vector2.new(Bottom1.X, Bottom1.Y); lines.line5.To = Vector2.new(Bottom2.X, Bottom2.Y)
+                lines.line6.From = Vector2.new(Bottom2.X, Bottom2.Y); lines.line6.To = Vector2.new(Bottom3.X, Bottom3.Y)
+                lines.line7.From = Vector2.new(Bottom3.X, Bottom3.Y); lines.line7.To = Vector2.new(Bottom4.X, Bottom4.Y)
+                lines.line8.From = Vector2.new(Bottom4.X, Bottom4.Y); lines.line8.To = Vector2.new(Bottom1.X, Bottom1.Y)
+                
+                -- Vertical lines
+                lines.line9.From = Vector2.new(Bottom1.X, Bottom1.Y); lines.line9.To = Vector2.new(Top1.X, Top1.Y)
+                lines.line10.From = Vector2.new(Bottom2.X, Bottom2.Y); lines.line10.To = Vector2.new(Top2.X, Top2.Y)
+                lines.line11.From = Vector2.new(Bottom3.X, Bottom3.Y); lines.line11.To = Vector2.new(Top3.X, Top3.Y)
+                lines.line12.From = Vector2.new(Bottom4.X, Bottom4.Y); lines.line12.To = Vector2.new(Top4.X, Top4.Y)
+                
+                -- Set colors and visibility
+                for i = 1, 12 do
+                    lines["line"..i].Color = currentColor
+                    lines["line"..i].Visible = true
+                end
             else
-                currentColor = ESP.TeamColorFriend
+                for i = 1, 12 do
+                    if lines["line"..i] then
+                        lines["line"..i].Visible = false
+                    end
+                end
             end
-        end
-        
-        -- Обновляем бокс (всегда, если включен)
-        if ESP.Boxes then
-            -- Top square
-            lines.line1.From = Vector2.new(Top1.X, Top1.Y); lines.line1.To = Vector2.new(Top2.X, Top2.Y)
-            lines.line2.From = Vector2.new(Top2.X, Top2.Y); lines.line2.To = Vector2.new(Top3.X, Top3.Y)
-            lines.line3.From = Vector2.new(Top3.X, Top3.Y); lines.line3.To = Vector2.new(Top4.X, Top4.Y)
-            lines.line4.From = Vector2.new(Top4.X, Top4.Y); lines.line4.To = Vector2.new(Top1.X, Top1.Y)
             
-            -- Bottom square
-            lines.line5.From = Vector2.new(Bottom1.X, Bottom1.Y); lines.line5.To = Vector2.new(Bottom2.X, Bottom2.Y)
-            lines.line6.From = Vector2.new(Bottom2.X, Bottom2.Y); lines.line6.To = Vector2.new(Bottom3.X, Bottom3.Y)
-            lines.line7.From = Vector2.new(Bottom3.X, Bottom3.Y); lines.line7.To = Vector2.new(Bottom4.X, Bottom4.Y)
-            lines.line8.From = Vector2.new(Bottom4.X, Bottom4.Y); lines.line8.To = Vector2.new(Bottom1.X, Bottom1.Y)
-            
-            -- Vertical lines
-            lines.line9.From = Vector2.new(Bottom1.X, Bottom1.Y); lines.line9.To = Vector2.new(Top1.X, Top1.Y)
-            lines.line10.From = Vector2.new(Bottom2.X, Bottom2.Y); lines.line10.To = Vector2.new(Top2.X, Top2.Y)
-            lines.line11.From = Vector2.new(Bottom3.X, Bottom3.Y); lines.line11.To = Vector2.new(Top3.X, Top3.Y)
-            lines.line12.From = Vector2.new(Bottom4.X, Bottom4.Y); lines.line12.To = Vector2.new(Top4.X, Top4.Y)
-            
-            -- Set colors and visibility
-            for i = 1, 12 do
-                lines["line"..i].Color = currentColor
-                lines["line"..i].Visible = true
+            -- Обновляем трейсер
+            if ESP.Tracers and onScreen then
+                local trace = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(0, -Size.Y, 0)).p)
+                lines.Tracer.From = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y)
+                lines.Tracer.To = Vector2.new(trace.X, trace.Y)
+                lines.Tracer.Color = currentColor
+                lines.Tracer.Visible = true
+            else
+                if lines.Tracer then lines.Tracer.Visible = false end
             end
-        else
-            for i = 1, 12 do
-                lines["line"..i].Visible = false
-            end
-        end
-        
-        -- Обновляем трейсер (если включен)
-        if ESP.Tracers then
-            local trace = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(0, -Size.Y, 0)).p)
-            lines.Tracer.From = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y)
-            lines.Tracer.To = Vector2.new(trace.X, trace.Y)
-            lines.Tracer.Color = currentColor
-            lines.Tracer.Visible = true
-        else
-            lines.Tracer.Visible = false
-        end
-        
-        -- Обновляем текст (если включен и игрок на экране)
-        if ESP.Names and onScreen and myRoot then
-            local headPos = camera:WorldToViewportPoint(head.Position + Vector3.new(0, 1.5, 0))
-            lines.NameText.Position = Vector2.new(headPos.X, headPos.Y - 30)
-            lines.NameText.Text = targetPlayer.Name
-            lines.NameText.Color = currentColor
-            lines.NameText.Visible = true
             
-            -- Distance text
-            local distance = (myRoot.Position - rootPart.Position).magnitude
-            lines.DistanceText.Position = Vector2.new(headPos.X, headPos.Y - 15)
-            lines.DistanceText.Text = math.floor(distance) .. "m"
-            lines.DistanceText.Color = ESP.DistanceColor
-            lines.DistanceText.Visible = true
-        else
-            lines.NameText.Visible = false
-            lines.DistanceText.Visible = false
-        end
-        
-        -- Apply autothickness
-        if ESP.Autothickness and myRoot then
-            local distance = (myRoot.Position - rootPart.Position).magnitude
-            local value = math.clamp(1/distance*100, 0.1, 4)
-            for i = 1, 12 do
-                lines["line"..i].Thickness = value
+            -- Обновляем текст
+            if ESP.Names and onScreen and myRoot then
+                local headPos = camera:WorldToViewportPoint(head.Position + Vector3.new(0, 1.5, 0))
+                lines.NameText.Position = Vector2.new(headPos.X, headPos.Y - 30)
+                lines.NameText.Text = targetPlayer.Name
+                lines.NameText.Color = currentColor
+                lines.NameText.Visible = true
+                
+                local distance = (myRoot.Position - rootPart.Position).magnitude
+                lines.DistanceText.Position = Vector2.new(headPos.X, headPos.Y - 15)
+                lines.DistanceText.Text = math.floor(distance) .. "m"
+                lines.DistanceText.Color = ESP.DistanceColor
+                lines.DistanceText.Visible = true
+            else
+                if lines.NameText then lines.NameText.Visible = false end
+                if lines.DistanceText then lines.DistanceText.Visible = false end
             end
-            lines.Tracer.Thickness = value
+            
+            -- Autothickness
+            if ESP.Autothickness and myRoot then
+                local distance = (myRoot.Position - rootPart.Position).magnitude
+                local value = math.clamp(1/distance*100, 0.1, 4)
+                for i = 1, 12 do
+                    if lines["line"..i] then
+                        lines["line"..i].Thickness = value
+                    end
+                end
+                if lines.Tracer then lines.Tracer.Thickness = value end
+            end
+        end)
+        
+        if not success then
+            warn("ESP Error:", err)
         end
     end)
-    
-    -- Сохраняем соединение для очистки
-    table.insert(connections, connection)
-    
-    -- Очистка при удалении игрока
-    local cleanup
-    cleanup = targetPlayer.AncestryChanged:Connect(function()
-        if targetPlayer.Parent == nil then
-            for _, line in pairs(lines) do
-                line:Remove()
-            end
-            if cleanup then cleanup:Disconnect() end
-        end
-    end)
-    table.insert(connections, cleanup)
 end
 
 --// Initialize for existing players
 for _, v in pairs(game.Players:GetPlayers()) do
     if v ~= player then
-        CreateESPForPlayer(v)
+        coroutine.wrap(function()
+            wait(0.5) -- Небольшая задержка для инициализации
+            CreateESPForPlayer(v)
+        end)()
     end
 end
 
 --// Handle new players
 game.Players.PlayerAdded:Connect(function(newplr)
     if newplr ~= player then
+        task.wait(1) -- Ждем загрузки персонажа
         CreateESPForPlayer(newplr)
     end
 end)
 
 --// Cleanup when players leave
 game.Players.PlayerRemoving:Connect(function(plr)
-    for i, conn in ipairs(connections) do
-        if conn and conn.Connected then
-            conn:Disconnect()
+    if ESP.Lines[plr] then
+        for _, line in pairs(ESP.Lines[plr]) do
+            pcall(function() line:Remove() end)
         end
+        ESP.Lines[plr] = nil
     end
-    connections = {}
 end)
 
 --// Активируем ESP
 ESP.Enabled = true
 
-print("ESP Loaded Successfully! No flickering version")
+--// Делаем ESP доступным глобально
+_G.ESP = ESP
+
+print("✅ ESP Loaded Successfully!")
+print("📝 Use _G.ESP to configure:")
+print("   _G.ESP.Boxes = true/false")
+print("   _G.ESP.Names = true/false")
+print("   _G.ESP.TeamCheck = true/false")
+
+-- Возвращаем ESP для loadstring
 return ESP
