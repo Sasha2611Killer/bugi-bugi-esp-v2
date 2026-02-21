@@ -16,15 +16,15 @@ ESP.Name_Size = 19
 ESP.Name_Center = true
 ESP.Name_Outline = true
 ESP.Name_Font = 2
-ESP.BoxShift = CFrame.new(0, -1.5, 0) -- Смещение бокса как в оригинале
-ESP.BoxSize = Vector3.new(4, 6, 0) -- Размер бокса как в оригинале
+ESP.BoxShift = CFrame.new(0, -1.5, 0)
+ESP.BoxSize = Vector3.new(4, 6, 0)
 ESP.Distance_Offset = 14
 ESP.Autothickness = false
 ESP.Team_Check = false
 ESP.Team_Color_Enemy = Color3.fromRGB(227, 52, 52)
 ESP.Team_Color_Friendly = Color3.fromRGB(88, 217, 24)
 ESP.TeamMates = true
-ESP.FaceCamera = false -- Поворачивать бокс лицом к камере
+ESP.FaceCamera = false
 
 --// Internal variables
 local workspace = game:GetService("Workspace")
@@ -33,9 +33,12 @@ local camera = workspace.CurrentCamera
 local players = game:GetService("Players")
 local runService = game:GetService("RunService")
 
---// Helper functions
+--// Helper functions - ВАЖНО: используем правильный синтаксис как в оригинале
 local function WorldToViewportPoint(point)
-    return camera:WorldToViewportPoint(point)
+    -- В оригинале: WorldToViewportPoint(cam, point)
+    -- В Luau: camera:WorldToViewportPoint(point)
+    local vector, visible = camera:WorldToViewportPoint(point)
+    return vector, visible
 end
 
 local function NewLine()
@@ -76,19 +79,11 @@ local function createESPForPlayer(plr)
     
     --// Create drawing objects
     local instances = {
-        -- 12 lines for 3D box
+        -- Lines for 2D box (упрощаем до 4 линий как в оригинале)
         line1 = NewLine(),
         line2 = NewLine(),
         line3 = NewLine(),
         line4 = NewLine(),
-        line5 = NewLine(),
-        line6 = NewLine(),
-        line7 = NewLine(),
-        line8 = NewLine(),
-        line9 = NewLine(),
-        line10 = NewLine(),
-        line11 = NewLine(),
-        line12 = NewLine(),
         -- Name text
         nameText = NewText(),
         -- Distance text
@@ -106,7 +101,7 @@ local function createESPForPlayer(plr)
                 
                 -- Team check
                 if not ESP.TeamMates and IsTeamMate(plr) then
-                    for i = 1, 12 do
+                    for i = 1, 4 do
                         instances["line"..i].Visible = false
                     end
                     instances.nameText.Visible = false
@@ -115,26 +110,26 @@ local function createESPForPlayer(plr)
                 end
                 
                 local rootPart = plr.Character.HumanoidRootPart
-                local head = plr.Character.Head
                 
-                -- Calculate CFrame with FaceCamera option (как в оригинале)
+                -- Calculate CFrame with FaceCamera option
                 local cf = rootPart.CFrame
                 if ESP.FaceCamera then
                     cf = CFrame.new(cf.p, camera.CFrame.p)
                 end
                 
-                -- Apply BoxShift (как в оригинале)
+                -- Apply BoxShift
                 cf = cf * ESP.BoxShift
                 
-                -- Calculate positions for all box corners (как в оригинале)
+                -- Calculate positions for box corners
                 local size = ESP.BoxSize
                 local locs = {
-                    TopLeft = cf * CFrame.new(size.X/2, size.Y/2, 0),
-                    TopRight = cf * CFrame.new(-size.X/2, size.Y/2, 0),
-                    BottomLeft = cf * CFrame.new(size.X/2, -size.Y/2, 0),
-                    BottomRight = cf * CFrame.new(-size.X/2, -size.Y/2, 0),
-                    TagPos = cf * CFrame.new(0, size.Y/2, 0),  -- Позиция для имени (сверху бокса)
-                    Torso = cf
+                    -- Для прямоугольника используем 4 угла
+                    TopLeft = cf * CFrame.new(-size.X/2, size.Y/2, 0),
+                    TopRight = cf * CFrame.new(size.X/2, size.Y/2, 0),
+                    BottomLeft = cf * CFrame.new(-size.X/2, -size.Y/2, 0),
+                    BottomRight = cf * CFrame.new(size.X/2, -size.Y/2, 0),
+                    -- Позиция для имени (над боксом)
+                    TagPos = cf * CFrame.new(0, size.Y/2 + 0.5, 0)
                 }
                 
                 -- Convert all positions to screen coordinates
@@ -144,105 +139,97 @@ local function createESPForPlayer(plr)
                 local BottomRight, Vis4 = WorldToViewportPoint(locs.BottomRight.p)
                 local TagPos, Vis5 = WorldToViewportPoint(locs.TagPos.p)
                 
-                -- Determine if any part is visible
-                local anyVisible = Vis1 or Vis2 or Vis3 or Vis4 or Vis5
+                -- Определяем цвета
+                local boxColor = ESP.Box_Color
+                local nameColor = ESP.Name_Color
                 
-                if anyVisible then
-                    -- Determine colors based on team check
-                    local boxColor = ESP.Box_Color
-                    local nameColor = ESP.Name_Color
-                    
-                    if ESP.Team_Check then
-                        if IsTeamMate(plr) then
-                            boxColor = ESP.Team_Color_Friendly
-                            nameColor = ESP.Team_Color_Friendly
-                        else
-                            boxColor = ESP.Team_Color_Enemy
-                            nameColor = ESP.Team_Color_Enemy
-                        end
-                    end
-                    
-                    -- Update thickness based on distance
-                    local thickness = ESP.Box_Thickness
-                    if ESP.Autothickness and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-                        local distance = (player.Character.HumanoidRootPart.Position - rootPart.Position).Magnitude
-                        thickness = math.clamp(1/distance * 100, 0.1, 4)
-                    end
-                    
-                    -- Update box lines if enabled
-                    if ESP.Boxes then
-                        -- Top square
-                        instances.line1.From = Vector2.new(TopLeft.X, TopLeft.Y)
-                        instances.line1.To = Vector2.new(TopRight.X, TopRight.Y)
-                        instances.line2.From = Vector2.new(TopRight.X, TopRight.Y)
-                        instances.line2.To = Vector2.new(BottomRight.X, BottomRight.Y)
-                        instances.line3.From = Vector2.new(BottomRight.X, BottomRight.Y)
-                        instances.line3.To = Vector2.new(BottomLeft.X, BottomLeft.Y)
-                        instances.line4.From = Vector2.new(BottomLeft.X, BottomLeft.Y)
-                        instances.line4.To = Vector2.new(TopLeft.X, TopLeft.Y)
-                        
-                        -- Bottom square (для 3D эффекта, но можно отключить если не нужно)
-                        -- В оригинале они используют Quad, а мы оставим 2D прямоугольник
-                        
-                        -- Apply properties to all lines
-                        for i = 1, 4 do
-                            local line = instances["line"..i]
-                            line.Color = boxColor
-                            line.Thickness = thickness
-                            line.Transparency = ESP.Box_Transparency
-                            line.Visible = true
-                        end
-                        
-                        -- Hide unused lines
-                        for i = 5, 12 do
-                            instances["line"..i].Visible = false
-                        end
+                if ESP.Team_Check then
+                    if IsTeamMate(plr) then
+                        boxColor = ESP.Team_Color_Friendly
+                        nameColor = ESP.Team_Color_Friendly
                     else
-                        for i = 1, 12 do
-                            instances["line"..i].Visible = false
-                        end
+                        boxColor = ESP.Team_Color_Enemy
+                        nameColor = ESP.Team_Color_Enemy
                     end
+                end
+                
+                -- Определяем толщину
+                local thickness = ESP.Box_Thickness
+                if ESP.Autothickness and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                    local distance = (player.Character.HumanoidRootPart.Position - rootPart.Position).Magnitude
+                    thickness = math.clamp(1/distance * 100, 0.1, 4)
+                end
+                
+                -- Обновляем бокс если виден
+                if ESP.Boxes and (Vis1 or Vis2 or Vis3 or Vis4) then
+                    -- Рисуем прямоугольник (4 линии)
+                    instances.line1.From = Vector2.new(TopLeft.X, TopLeft.Y)
+                    instances.line1.To = Vector2.new(TopRight.X, TopRight.Y)
+                    instances.line1.Color = boxColor
+                    instances.line1.Thickness = thickness
+                    instances.line1.Transparency = ESP.Box_Transparency
+                    instances.line1.Visible = true
                     
-                    -- Update name text if enabled and tag position is visible
-                    if ESP.Names and Vis5 then
-                        -- Name (позиция из TagPos как в оригинале)
-                        instances.nameText.Position = Vector2.new(TagPos.X, TagPos.Y)
-                        instances.nameText.Text = plr.Name
-                        instances.nameText.Color = nameColor
-                        instances.nameText.Size = ESP.Name_Size
-                        instances.nameText.Center = ESP.Name_Center
-                        instances.nameText.Outline = ESP.Name_Outline
-                        instances.nameText.Font = ESP.Name_Font
-                        instances.nameText.Visible = true
-                        
-                        -- Distance (под именем как в оригинале)
-                        if ESP.ShowDistance then
-                            local distance = math.floor((camera.CFrame.p - rootPart.Position).Magnitude)
-                            instances.distanceText.Position = Vector2.new(TagPos.X, TagPos.Y + ESP.Distance_Offset)
-                            instances.distanceText.Text = distance .. "m"
-                            instances.distanceText.Color = nameColor
-                            instances.distanceText.Size = ESP.Name_Size - 2
-                            instances.distanceText.Center = ESP.Name_Center
-                            instances.distanceText.Outline = ESP.Name_Outline
-                            instances.distanceText.Font = ESP.Name_Font
-                            instances.distanceText.Visible = true
-                        else
-                            instances.distanceText.Visible = false
-                        end
-                    else
-                        instances.nameText.Visible = false
-                        instances.distanceText.Visible = false
-                    end
+                    instances.line2.From = Vector2.new(TopRight.X, TopRight.Y)
+                    instances.line2.To = Vector2.new(BottomRight.X, BottomRight.Y)
+                    instances.line2.Color = boxColor
+                    instances.line2.Thickness = thickness
+                    instances.line2.Transparency = ESP.Box_Transparency
+                    instances.line2.Visible = true
                     
+                    instances.line3.From = Vector2.new(BottomRight.X, BottomRight.Y)
+                    instances.line3.To = Vector2.new(BottomLeft.X, BottomLeft.Y)
+                    instances.line3.Color = boxColor
+                    instances.line3.Thickness = thickness
+                    instances.line3.Transparency = ESP.Box_Transparency
+                    instances.line3.Visible = true
+                    
+                    instances.line4.From = Vector2.new(BottomLeft.X, BottomLeft.Y)
+                    instances.line4.To = Vector2.new(TopLeft.X, TopLeft.Y)
+                    instances.line4.Color = boxColor
+                    instances.line4.Thickness = thickness
+                    instances.line4.Transparency = ESP.Box_Transparency
+                    instances.line4.Visible = true
                 else
-                    for i = 1, 12 do
+                    for i = 1, 4 do
                         instances["line"..i].Visible = false
                     end
+                end
+                
+                -- Обновляем имя если видна позиция для тега
+                if ESP.Names and Vis5 then
+                    -- Отладочный вывод
+                    -- print("TagPos:", TagPos.X, TagPos.Y, "Visible:", Vis5)
+                    
+                    instances.nameText.Position = Vector2.new(TagPos.X, TagPos.Y)
+                    instances.nameText.Text = plr.Name
+                    instances.nameText.Color = nameColor
+                    instances.nameText.Size = ESP.Name_Size
+                    instances.nameText.Center = ESP.Name_Center
+                    instances.nameText.Outline = ESP.Name_Outline
+                    instances.nameText.Font = ESP.Name_Font
+                    instances.nameText.Visible = true
+                    
+                    if ESP.ShowDistance then
+                        local distance = math.floor((camera.CFrame.p - rootPart.Position).Magnitude)
+                        instances.distanceText.Position = Vector2.new(TagPos.X, TagPos.Y + ESP.Distance_Offset)
+                        instances.distanceText.Text = distance .. "m"
+                        instances.distanceText.Color = nameColor
+                        instances.distanceText.Size = ESP.Name_Size - 2
+                        instances.distanceText.Center = ESP.Name_Center
+                        instances.distanceText.Outline = ESP.Name_Outline
+                        instances.distanceText.Font = ESP.Name_Font
+                        instances.distanceText.Visible = true
+                    else
+                        instances.distanceText.Visible = false
+                    end
+                else
                     instances.nameText.Visible = false
                     instances.distanceText.Visible = false
                 end
+                
             else
-                for i = 1, 12 do
+                for i = 1, 4 do
                     instances["line"..i].Visible = false
                 end
                 instances.nameText.Visible = false
