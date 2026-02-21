@@ -16,8 +16,7 @@ ESP.Name_Size = 19
 ESP.Name_Center = true
 ESP.Name_Outline = true
 ESP.Name_Font = 2 -- 0 = System, 1 = Monospace, 2 = UI, 3 = Bold
-ESP.Distance_Offset = 14 -- Смещение расстояния под именем
-ESP.AttachShift = 1 -- Позиция имени (1 - сверху, 2 - центр и т.д.)
+ESP.Distance_Offset = 20 -- Смещение расстояния под именем
 ESP.Autothickness = false -- Makes screen less encumbered
 ESP.Team_Check = false
 ESP.Team_Color_Enemy = Color3.fromRGB(227, 52, 52)
@@ -62,11 +61,6 @@ end
 
 local function IsTeamMate(p)
     return GetTeam(p) == GetTeam(player)
-end
-
-local function GetColor(obj)
-    local p = players:GetPlayerFromCharacter(obj)
-    return p and ESP.Team_Check and p.Team and (IsTeamMate(p) and ESP.Team_Color_Friendly or ESP.Team_Color_Enemy) or ESP.Name_Color
 end
 
 --// Main ESP function for each player
@@ -116,9 +110,15 @@ local function createESPForPlayer(plr)
                 
                 local rootPart = plr.Character.HumanoidRootPart
                 local head = plr.Character.Head
-                local pos, visible = camera:WorldToViewportPoint(rootPart.Position)
                 
-                if visible then
+                -- Get the head position for name placement
+                local headPos = head.Position
+                local headScreenPos, headVisible = camera:WorldToViewportPoint(headPos)
+                
+                -- Get root part position for box calculation
+                local rootScreenPos, rootVisible = camera:WorldToViewportPoint(rootPart.Position)
+                
+                if headVisible or rootVisible then
                     -- Calculate box size based on head size
                     local Scale = head.Size.Y/2
                     local Size = Vector3.new(2, 3, 1.5) * (Scale * 2)
@@ -133,9 +133,6 @@ local function createESPForPlayer(plr)
                     local Bottom2 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(-Size.X, -Size.Y, Size.Z)).p)
                     local Bottom3 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, -Size.Y, Size.Z)).p)
                     local Bottom4 = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(Size.X, -Size.Y, -Size.Z)).p)
-                    
-                    -- Calculate position for name (above the head)
-                    local TagPos = camera:WorldToViewportPoint((rootPart.CFrame * CFrame.new(0, Size.Y + 0.5, 0)).p)
                     
                     -- Determine colors based on team check
                     local boxColor = ESP.Box_Color
@@ -196,7 +193,7 @@ local function createESPForPlayer(plr)
                             line.Color = boxColor
                             line.Thickness = thickness
                             line.Transparency = ESP.Box_Transparency
-                            line.Visible = true
+                            line.Visible = rootVisible -- Only show box if root part is visible
                         end
                     else
                         -- Hide boxes if disabled
@@ -205,10 +202,13 @@ local function createESPForPlayer(plr)
                         end
                     end
                     
-                    -- Update name text if enabled
-                    if ESP.Names then
+                    -- Update name text if enabled and head is visible
+                    if ESP.Names and headVisible then
+                        -- Position name above head
+                        local nameY = headScreenPos.Y - 30 -- Position above head
+                        
                         -- Name
-                        instances.nameText.Position = Vector2.new(TagPos.X, TagPos.Y)
+                        instances.nameText.Position = Vector2.new(headScreenPos.X, nameY)
                         instances.nameText.Text = plr.Name
                         instances.nameText.Color = nameColor
                         instances.nameText.Size = ESP.Name_Size
@@ -220,8 +220,8 @@ local function createESPForPlayer(plr)
                         -- Distance
                         if ESP.ShowDistance then
                             local distance = math.floor((camera.CFrame.p - rootPart.Position).Magnitude)
-                            instances.distanceText.Position = Vector2.new(TagPos.X, TagPos.Y + ESP.Distance_Offset)
-                            instances.distanceText.Text = distance .. "m away"
+                            instances.distanceText.Position = Vector2.new(headScreenPos.X, nameY + ESP.Distance_Offset)
+                            instances.distanceText.Text = distance .. "m"
                             instances.distanceText.Color = nameColor
                             instances.distanceText.Size = ESP.Name_Size - 2
                             instances.distanceText.Center = ESP.Name_Center
