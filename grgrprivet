@@ -8,7 +8,7 @@ local RunService = game:GetService("RunService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
--- Настройки ESP
+-- Настройки ESP (изменяйте их в любое время - всё обновится автоматически)
 ESP.Settings = {
     Enabled = true,           -- Включить/выключить ESP
     EspBox = true,            -- Показывать бокс
@@ -120,8 +120,6 @@ end
 
 -- Спрятать весь ESP для игрока
 local function HideAllESP(plr)
-    if not ESP.Settings.Enabled then return end
-    
     if Boxes[plr] then
         Boxes[plr].Visible = false
     end
@@ -363,19 +361,49 @@ local function OnPlayerAdded(plr)
     end
 end
 
+-- Отслеживаем изменения в настройках (для автоматического обновления)
+local SettingsMetatable = {
+    __newindex = function(t, key, value)
+        rawset(t, key, value)
+        
+        -- Автоматически обновляем соответствующие элементы при изменении настроек
+        if key == "BoxColor" or key == "BoxThickness" then
+            for _, box in pairs(Boxes) do
+                if box then
+                    box.Color = ESP.Settings.BoxColor
+                    box.Thickness = ESP.Settings.BoxThickness
+                end
+            end
+        elseif key == "NameColor" or key == "OutlineColor" then
+            for _, nameTag in pairs(Names) do
+                if nameTag then
+                    nameTag.Color = ESP.Settings.NameColor
+                    nameTag.OutlineColor = ESP.Settings.OutlineColor
+                end
+            end
+            for _, healthText in pairs(HealthTexts) do
+                if healthText then
+                    healthText.OutlineColor = ESP.Settings.OutlineColor
+                end
+            end
+        end
+    end
+}
+
+-- Применяем метатаблицу к настройкам
+setmetatable(ESP.Settings, SettingsMetatable)
+
 -- Основной цикл обновления
 RunService.RenderStepped:Connect(function()
-    if not ESP.Settings.Enabled then
-        -- Если ESP выключен, прячем всё
-        for plr, _ in pairs(Boxes) do
-            HideAllESP(plr)
-        end
-        return
-    end
-    
     for plr, box in pairs(Boxes) do
         -- Проверяем, нужно ли показывать этого игрока
         if plr == LocalPlayer and not ESP.Settings.ShowSelf then
+            HideAllESP(plr)
+            continue
+        end
+        
+        -- Если ESP выключен, прячем всё
+        if not ESP.Settings.Enabled then
             HideAllESP(plr)
             continue
         end
@@ -432,18 +460,20 @@ RunService.RenderStepped:Connect(function()
         local height = math.abs(headPos.Y - legPos.Y)
         local width = height * 0.55
 
-        -- Обновляем box
+        -- Обновляем box (с текущими настройками)
         if ESP.Settings.EspBox and box then
             box.Size = Vector2.new(width, height)
             box.Position = Vector2.new(rootPos.X - width/2, rootPos.Y - height/2)
+            -- Цвет и толщина уже применяются через метатаблицу, но на всякий случай обновляем
             box.Color = ESP.Settings.BoxColor
             box.Thickness = ESP.Settings.BoxThickness
+            box.Transparency = ESP.Settings.Transparency
             box.Visible = true
         elseif box then
             box.Visible = false
         end
         
-        -- Обновляем имя
+        -- Обновляем имя (с текущими настройками)
         if ESP.Settings.EspName and nameTag then
             nameTag.Position = Vector2.new(rootPos.X, rootPos.Y - height/2 - 20)
             nameTag.Color = ESP.Settings.NameColor
@@ -453,7 +483,7 @@ RunService.RenderStepped:Connect(function()
             nameTag.Visible = false
         end
         
-        -- Обновляем полоску здоровья
+        -- Обновляем полоску здоровья (с текущими настройками)
         if ESP.Settings.EspHealthBar and healthBar and healthBar.bg and healthBar.fill then
             local barWidth = ESP.Settings.HealthBarWidth
             local barHeight = height
@@ -478,7 +508,7 @@ RunService.RenderStepped:Connect(function()
             if healthBar.fill then healthBar.fill.Visible = false end
         end
         
-        -- Обновляем текст здоровья
+        -- Обновляем текст здоровья (с текущими настройками)
         if ESP.Settings.EspHealthText and healthText and humanoid then
             local healthPercent = math.max(0, math.min(1, health / maxHealth))
             healthText.Color = GetHealthColor(healthPercent)
@@ -503,28 +533,7 @@ for _, plr in Players:GetPlayers() do
     end
 end
 
-print("ESP loaded with settings!")
-
--- Функция для обновления настроек (можно вызывать после изменения)
-function ESP.UpdateSettings()
-    -- Обновляем толщину бокса для всех
-    for plr, box in pairs(Boxes) do
-        if box then
-            box.Thickness = ESP.Settings.BoxThickness
-            box.Color = ESP.Settings.BoxColor
-        end
-    end
-    
-    -- Обновляем цвета имен
-    for plr, nameTag in pairs(Names) do
-        if nameTag then
-            nameTag.Color = ESP.Settings.NameColor
-            nameTag.OutlineColor = ESP.Settings.OutlineColor
-        end
-    end
-    
-    print("ESP settings updated!")
-end
+print("ESP loaded with automatic settings update!")
 
 -- Возвращаем таблицу ESP
 return ESP
