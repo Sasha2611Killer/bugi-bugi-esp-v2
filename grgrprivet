@@ -25,7 +25,7 @@ ESP.Settings = {
     ShowSelf = false,
     BoxThickness = 1.6,
     MaxRenderDistance = 1000,
-    Debug = true, -- Для отладки
+    UpdateRate = 30, -- Обновление 30 раз в секунду
 }
 
 -- Внутренние переменные
@@ -37,18 +37,7 @@ local Humanoids = {}
 local Connections = {}
 local PlayerData = {}
 local PlayerState = {} -- "alive", "dead", "respawning"
-
--- Для отладки
-local function DebugLog(...)
-    if ESP.Settings.Debug then
-        print("[ESP]", ...)
-    end
-end
-
--- Проверяем режим камеры
-local function IsLockFirstPerson()
-    return LocalPlayer and LocalPlayer.CameraMode == Enum.CameraMode.LockFirstPerson
-end
+local LastUpdate = 0
 
 -- Функция для проверки, враг ли игрок
 local function IsEnemy(plr)
@@ -90,12 +79,11 @@ local function ClearPlayerData(plr)
     PlayerData[plr] = nil
 end
 
--- Очистка соединений (НО НЕ УДАЛЯЕМ CharacterAdded!)
+-- Очистка соединений
 local function ClearConnections(plr, keepCharAdded)
     if Connections[plr] then
         local charAddedConn = nil
         
-        -- Сохраняем CharacterAdded если нужно
         if keepCharAdded and Connections[plr].charAdded then
             charAddedConn = Connections[plr].charAdded
         end
@@ -108,7 +96,6 @@ local function ClearConnections(plr, keepCharAdded)
         
         Connections[plr] = {}
         
-        -- Восстанавливаем CharacterAdded
         if charAddedConn then
             Connections[plr].charAdded = charAddedConn
         end
@@ -117,8 +104,6 @@ end
 
 -- Полное удаление ESP для игрока
 local function DestroyESP(plr)
-    DebugLog("Destroying ESP for", plr.Name)
-    
     local function safeDestroy(obj)
         if obj then
             pcall(function() 
@@ -143,18 +128,13 @@ local function DestroyESP(plr)
     HealthTexts[plr] = nil
 
     ClearPlayerData(plr)
-    -- НЕ очищаем Connections полностью, сохраняем CharacterAdded
     ClearConnections(plr, true)
     PlayerState[plr] = "dead"
 end
 
 -- Создание ESP для игрока
 local function CreateESP(plr)
-    DebugLog("Creating ESP for", plr.Name)
-    
-    -- Если уже есть - не создаем
     if Boxes[plr] then 
-        DebugLog("ESP already exists for", plr.Name)
         return Boxes[plr]
     end
 
@@ -202,7 +182,6 @@ local function CreateESP(plr)
     HealthTexts[plr] = healthText
     
     PlayerState[plr] = "alive"
-    DebugLog("ESP created for", plr.Name)
     
     return box
 end
@@ -327,25 +306,16 @@ end
 
 -- Обработка смерти игрока
 local function OnPlayerDied(plr)
-    DebugLog("Player died:", plr.Name)
-    -- Удаляем ESP мертвого игрока
     DestroyESP(plr)
 end
 
--- Обработка добавления персонажа (респавн)
+-- Обработка добавления персонажа
 local function OnCharacterAdded(plr, char)
-    DebugLog("Character added for", plr.Name, "- creating ESP")
-    
-    -- Создаем новый ESP (DestroyESP уже вызван при смерти)
     CreateESP(plr)
-    
-    -- Очищаем старые соединения (кроме CharacterAdded)
     ClearConnections(plr, true)
     
-    -- Создаем новые соединения для этого персонажа
     local humanoid = GetHumanoid(char)
     if humanoid then
-        -- Отслеживаем смерть
         local diedConn = humanoid.Died:Connect(function()
             OnPlayerDied(plr)
         end)
@@ -355,7 +325,6 @@ local function OnCharacterAdded(plr, char)
         end
         Connections[plr].died = diedConn
         
-        -- Отслеживаем изменения здоровья
         local healthChangedConn = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
             PlayerData[plr] = PlayerData[plr] or {}
             PlayerData[plr].healthChanged = true
@@ -363,19 +332,14 @@ local function OnCharacterAdded(plr, char)
         Connections[plr].healthChanged = healthChangedConn
     end
 
-    -- Отслеживаем удаление персонажа
     local charRemovedConn = char.AncestryChanged:Connect(function()
         if not char.Parent then
-            DebugLog("Character removed for", plr.Name)
             OnPlayerDied(plr)
         end
     end)
     Connections[plr].charRemoved = charRemovedConn
     
-    -- Обновляем Humanoid
     UpdateHumanoid(plr)
-    
-    DebugLog("ESP setup complete for", plr.Name)
 end
 
 -- Обработка добавления игрока
@@ -384,9 +348,6 @@ local function OnPlayerAdded(plr)
         return
     end
 
-    DebugLog("Player added:", plr.Name)
-
-    -- Создаем соединение для появления персонажа
     local charAddedConn = plr.CharacterAdded:Connect(function(char)
         OnCharacterAdded(plr, char)
     end)
@@ -396,12 +357,9 @@ local function OnPlayerAdded(plr)
     end
     Connections[plr].charAdded = charAddedConn
 
-    -- Если персонаж уже есть - обрабатываем его сразу
     if plr.Character then
-        DebugLog("Player already has character:", plr.Name)
         OnCharacterAdded(plr, plr.Character)
     else
-        DebugLog("Player waiting for character:", plr.Name)
         PlayerState[plr] = "respawning"
     end
 end
@@ -436,8 +394,16 @@ local SettingsMetatable = {
 
 setmetatable(ESP.Settings, SettingsMetatable)
 
--- Основной цикл
-RunService.RenderStepped:Connect(function()
+-- ОСНОВНОЙ ЦИКЛ С HEARTBEAT (лучше чем RenderStepped!)
+RunService.Heartbeat:Connect(function()
+    local currentTime = tick()
+    
+    -- Ограничиваем частоту обновления
+    if currentTime - LastUpdate < (1 / ESP.Settings.UpdateRate) then
+        return
+    end
+    LastUpdate = currentTime
+    
     for plr, box in pairs(Boxes) do
         if plr == LocalPlayer then
             continue
@@ -472,7 +438,6 @@ RunService.RenderStepped:Connect(function()
 
         local char = plr.Character
         if not char or not char.Parent then
-            -- Если персонажа нет - удаляем ESP
             DestroyESP(plr)
             continue
         end
@@ -681,7 +646,7 @@ for _, plr in Players:GetPlayers() do
     end
 end
 
-DebugLog("ESP loaded - handles death and respawn properly")
-DebugLog("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
+print("ESP loaded with Heartbeat (better performance)")
+print("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
 
 return ESP
