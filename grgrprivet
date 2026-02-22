@@ -23,7 +23,7 @@ ESP.Settings = {
     Transparency = 1,
     ShowTeammates = false,
     ShowEnemies = true,
-    ShowSelf = false,
+    ShowSelf = false,  -- Себя не показываем в любом случае
     BoxThickness = 1.6,
     MaxRenderDistance = 1000,
 }
@@ -37,27 +37,31 @@ local Humanoids = {}
 local Connections = {}
 local PlayerData = {}
 
--- Для LockFirstPerson используем направление камеры
-local LastCameraCFrame = CFrame.new()
-local CameraDirection = Vector3.new()
-
--- Функция для проверки режима камеры
-local function IsFirstPerson()
-    return Camera and (Camera.CameraType == Enum.CameraType.LockFirstPerson or 
-                       Camera.Focus == Camera.CFrame) -- Признак первого лица
+-- Определяем режим камеры как в оригинальном коде
+local function GetCameraMode()
+    if not LocalPlayer then return "Classic" end
+    
+    -- Смотрим на CameraMode как в оригинале
+    if LocalPlayer.CameraMode == Enum.CameraMode.LockFirstPerson then
+        -- В оригинале они используют Classic режим даже при LockFirstPerson
+        return "Classic"
+    elseif LocalPlayer.CameraMode == Enum.CameraMode.Classic then
+        return "Classic"
+    end
+    return "Classic"
 end
 
--- Функция для проверки видимости в первом лице
-local function IsInFirstPersonView(targetPosition)
-    if not IsFirstPerson() then return true end
-    
-    -- Получаем направление камеры
-    local cameraPos = Camera.CFrame.Position
-    local direction = (targetPosition - cameraPos).Unit
-    
-    -- Проверяем угол обзора (примерно 90 градусов)
-    local dot = Camera.CFrame.LookVector:Dot(direction)
-    return dot > 0.2 -- Видно если в пределах ~80 градусов
+-- Проверка, в первом лице ли сейчас камера
+local function IsFirstPersonActive()
+    local mode = GetCameraMode()
+    if mode == "Classic" then
+        -- В Classic режиме проверяем расстояние камеры
+        if Camera and Camera.Focus and Camera.CFrame then
+            local distance = (Camera.CFrame.Position - Camera.Focus.Position).Magnitude
+            return distance < 2 -- Если камера близко - значит первое лицо
+        end
+    end
+    return mode == "LockFirstPerson"
 end
 
 -- Функция для проверки, враг ли игрок
@@ -70,6 +74,7 @@ local function IsEnemy(plr)
     local theirChar = plr.Character
     if not myChar or not theirChar then return false end
 
+    -- Получаем команды
     local myTeam = "Enemy"
     local theirTeam = "Enemy"
     
@@ -311,20 +316,17 @@ local function WorldToScreen(position)
     }
 end
 
--- Проверка видимости с учетом первого лица
-local function ShouldShowESP(plr, position)
-    -- Всегда показываем других игроков
-    if plr ~= LocalPlayer then
-        return true
-    end
-    
-    -- Для себя проверяем настройки
-    if not ESP.Settings.ShowSelf then
+-- Проверка видимости
+local function IsPositionValid(screenPos)
+    if not screenPos.Visible or screenPos.Z <= 0.1 then
         return false
     end
     
-    -- В первом лице себя не показываем (бессмысленно)
-    if IsFirstPerson() then
+    if screenPos.X < 0 or screenPos.X > Camera.ViewportSize.X then
+        return false
+    end
+    
+    if screenPos.Y < 0 or screenPos.Y > Camera.ViewportSize.Y then
         return false
     end
     
@@ -389,9 +391,9 @@ end
 
 -- Обработка добавления игрока
 local function OnPlayerAdded(plr)
-    -- Для локального игрока в первом лице не создаем ESP
-    if plr == LocalPlayer and IsFirstPerson() and not ESP.Settings.ShowSelf then
-        return 
+    -- Никогда не создаем ESP для себя
+    if plr == LocalPlayer then
+        return
     end
 
     CreateESP(plr)
@@ -440,17 +442,11 @@ local SettingsMetatable = {
 
 setmetatable(ESP.Settings, SettingsMetatable)
 
--- Основной цикл
+-- Основной цикл - только для других игроков
 RunService.RenderStepped:Connect(function()
-    -- Обновляем информацию о камере для первого лица
-    if IsFirstPerson() then
-        CameraDirection = Camera.CFrame.LookVector
-    end
-    
+    -- Никогда не обрабатываем локального игрока
     for plr, box in pairs(Boxes) do
-        -- Пропускаем локального игрока в первом лице
-        if plr == LocalPlayer and IsFirstPerson() and not ESP.Settings.ShowSelf then
-            HideAllESP(plr)
+        if plr == LocalPlayer then
             continue
         end
 
@@ -465,18 +461,11 @@ RunService.RenderStepped:Connect(function()
             continue
         end
 
-        -- Для локального игрока используем другие части
-        local hrp, head
-        if plr == LocalPlayer then
-            -- Для себя используем центр масс или позицию камеры
-            hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
-            head = char:FindFirstChild("Head")
-        else
-            hrp = char:FindFirstChild("HumanoidRootPart") or 
-                  char:FindFirstChild("Torso") or 
-                  char:FindFirstChild("UpperTorso")
-            head = char:FindFirstChild("Head")
-        end
+        -- Получаем части персонажа
+        local hrp = char:FindFirstChild("HumanoidRootPart") or 
+                    char:FindFirstChild("Torso") or 
+                    char:FindFirstChild("UpperTorso")
+        local head = char:FindFirstChild("Head")
         
         if not hrp or not head then
             HideAllESP(plr)
@@ -512,9 +501,9 @@ RunService.RenderStepped:Connect(function()
         local legScreen = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
         
         -- Проверяем видимость
-        local rootValid = rootScreen.Visible and rootScreen.Z > 0.1
-        local headValid = headScreen.Visible and headScreen.Z > 0.1
-        local legValid = legScreen.Visible and legScreen.Z > 0.1
+        local rootValid = IsPositionValid(rootScreen)
+        local headValid = IsPositionValid(headScreen)
+        local legValid = IsPositionValid(legScreen)
         
         if not rootValid and not headValid and not legValid then
             HideAllESP(plr)
@@ -624,11 +613,11 @@ Players.PlayerRemoving:Connect(RemoveESP)
 
 -- Обрабатываем уже существующих игроков
 for _, plr in Players:GetPlayers() do
-    if plr ~= LocalPlayer or (not IsFirstPerson() and ESP.Settings.ShowSelf) then
+    if plr ~= LocalPlayer then
         OnPlayerAdded(plr)
     end
 end
 
-print("ESP loaded with LockFirstPerson support!")
+print("ESP loaded with proper LockFirstPerson support (only shows other players)")
 
 return ESP
