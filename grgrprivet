@@ -220,14 +220,19 @@ local function RemoveESP(plr)
     ClearConnections(plr)
 end
 
--- Получение цвета здоровья
+-- Получение цвета здоровья (УЛУЧШЕНО)
 local function GetHealthColor(percent)
+    -- Принудительно нормализуем процент
+    percent = math.max(0, math.min(1, percent))
+    
     if percent > 0.6 then
-        return Color3.fromRGB(0, 255, 0)
+        return Color3.fromRGB(0, 255, 0) -- Ярко зеленый
     elseif percent > 0.3 then
-        return Color3.fromRGB(255, 255, 0)
+        return Color3.fromRGB(255, 255, 0) -- Ярко желтый
+    elseif percent > 0.1 then
+        return Color3.fromRGB(255, 100, 0) -- Оранжевый для критического
     else
-        return Color3.fromRGB(255, 0, 0)
+        return Color3.fromRGB(255, 0, 0) -- Ярко красный
     end
 end
 
@@ -260,10 +265,38 @@ local function GetSafeHealthValues(humanoid)
     return health, maxHealth
 end
 
--- Отслеживание смерти
+-- Функция для принудительного обновления цвета полоски здоровья (НОВАЯ)
+local function UpdateHealthBarColor(plr, healthPercent)
+    if not HealthBars[plr] or not HealthBars[plr].fill then return end
+    
+    local fillBar = HealthBars[plr].fill
+    fillBar.Color = GetHealthColor(healthPercent)
+    
+    -- Принудительно обновляем видимость, чтобы цвет применился
+    fillBar.Visible = fillBar.Visible
+end
+
+-- Отслеживание смерти и изменений здоровья (УЛУЧШЕНО)
 local function TrackDeath(plr, humanoid)
     if not humanoid then return end
 
+    -- Отслеживаем изменения здоровья для обновления цвета
+    local healthChangedConn = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+        if Humanoids[plr] == humanoid then
+            local health, maxHealth = GetSafeHealthValues(humanoid)
+            if maxHealth > 0 then
+                local healthPercent = health / maxHealth
+                UpdateHealthBarColor(plr, healthPercent)
+            end
+        end
+    end)
+    
+    if not Connections[plr] then
+        Connections[plr] = {}
+    end
+    table.insert(Connections[plr], healthChangedConn)
+
+    -- Отслеживаем смерть
     local diedConn
     diedConn = humanoid.Died:Connect(function()
         ClearPlayerData(plr)
@@ -278,14 +311,10 @@ local function TrackDeath(plr, humanoid)
             diedConn:Disconnect()
         end
     end)
-
-    if not Connections[plr] then
-        Connections[plr] = {}
-    end
     table.insert(Connections[plr], diedConn)
 end
 
--- Обработка добавления персонажа
+-- Обработка добавления персонажа (УЛУЧШЕНО)
 local function OnCharacterAdded(plr, char)
     ClearPlayerData(plr)
     ClearConnections(plr)
@@ -299,12 +328,24 @@ local function OnCharacterAdded(plr, char)
     local humanoid = Humanoids[plr]
     if humanoid then
         TrackDeath(plr, humanoid)
+        
+        -- Принудительно обновляем цвет при создании персонажа
+        local health, maxHealth = GetSafeHealthValues(humanoid)
+        if maxHealth > 0 then
+            UpdateHealthBarColor(plr, health / maxHealth)
+        end
     end
 
     local childAddedConn = char.ChildAdded:Connect(function(child)
         if child:IsA("Humanoid") then
             UpdateHumanoid(plr)
             TrackDeath(plr, child)
+            
+            -- Обновляем цвет для нового Humanoid
+            local health, maxHealth = GetSafeHealthValues(child)
+            if maxHealth > 0 then
+                UpdateHealthBarColor(plr, health / maxHealth)
+            end
         end
     end)
     table.insert(Connections[plr], childAddedConn)
@@ -393,7 +434,7 @@ local SettingsMetatable = {
 -- Применяем метатаблицу к настройкам
 setmetatable(ESP.Settings, SettingsMetatable)
 
--- Основной цикл обновления
+-- Основной цикл обновления (УЛУЧШЕНО)
 RunService.RenderStepped:Connect(function()
     for plr, box in pairs(Boxes) do
         -- Проверяем, нужно ли показывать этого игрока
@@ -459,6 +500,7 @@ RunService.RenderStepped:Connect(function()
 
         local height = math.abs(headPos.Y - legPos.Y)
         local width = height * 0.55
+        local healthPercent = math.max(0, math.min(1, health / maxHealth))
 
         -- Обновляем box (с текущими настройками)
         if ESP.Settings.EspBox and box then
@@ -493,9 +535,9 @@ RunService.RenderStepped:Connect(function()
             healthBar.bg.Position = Vector2.new(barX, barY)
             healthBar.bg.Visible = true
 
-            local healthPercent = math.max(0, math.min(1, health / maxHealth))
             local fillHeight = barHeight * healthPercent
 
+            -- Принудительно обновляем цвет каждый кадр для надежности
             healthBar.fill.Color = GetHealthColor(healthPercent)
             fillHeight = math.max(0, math.min(barHeight, fillHeight))
 
@@ -509,7 +551,6 @@ RunService.RenderStepped:Connect(function()
 
         -- Обновляем текст здоровья (с текущими настройками)
         if ESP.Settings.EspHealthText and healthText and humanoid then
-            local healthPercent = math.max(0, math.min(1, health / maxHealth))
             healthText.Color = GetHealthColor(healthPercent)
             healthText.OutlineColor = ESP.Settings.OutlineColor
             healthText.Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
