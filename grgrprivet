@@ -35,7 +35,7 @@ local HealthTexts = {}
 local Humanoids = {}
 local Connections = {}
 local PlayerData = {}
-local HasCharacter = {}
+local PlayerState = {} -- "alive", "dead", "respawning"
 
 -- Проверяем режим камеры
 local function IsLockFirstPerson()
@@ -92,7 +92,7 @@ local function ClearConnections(plr)
     end
 end
 
--- Удаление ESP для игрока
+-- Полное удаление ESP для игрока
 local function DestroyESP(plr)
     local function safeDestroy(obj)
         if obj then
@@ -119,7 +119,7 @@ local function DestroyESP(plr)
 
     ClearPlayerData(plr)
     ClearConnections(plr)
-    HasCharacter[plr] = nil
+    PlayerState[plr] = nil
 end
 
 -- Создание ESP для игрока
@@ -293,40 +293,24 @@ local function UpdateHumanoid(plr)
     return false
 end
 
--- Отслеживание смерти
-local function TrackDeath(plr, humanoid)
-    if not humanoid then return end
-
-    if not Connections[plr] then
-        Connections[plr] = {}
-    end
-
-    local healthChangedConn = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
-        PlayerData[plr] = PlayerData[plr] or {}
-        PlayerData[plr].healthChanged = true
-    end)
-    table.insert(Connections[plr], healthChangedConn)
-
-    local diedConn = humanoid.Died:Connect(function()
-        ClearPlayerData(plr)
-        -- При смерти просто прячем
-        if Boxes[plr] then
-            Boxes[plr].Visible = false
-            if Names[plr] then Names[plr].Visible = false end
-            if HealthBars[plr] then
-                if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-                if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-            end
-            if HealthTexts[plr] then HealthTexts[plr].Visible = false end
-        end
-        HasCharacter[plr] = false
-    end)
-    table.insert(Connections[plr], diedConn)
+-- Обработка смерти игрока
+local function OnPlayerDied(plr)
+    -- Удаляем ESP мертвого игрока
+    DestroyESP(plr)
+    PlayerState[plr] = "dead"
 end
 
--- Обработка добавления персонажа
+-- Обработка респавна игрока
+local function OnPlayerRespawning(plr)
+    PlayerState[plr] = "respawning"
+end
+
+-- Обработка добавления персонажа (респавн)
 local function OnCharacterAdded(plr, char)
-    -- ВАЖНО: Всегда создаем ESP когда появляется персонаж
+    -- Удаляем старый ESP если есть
+    DestroyESP(plr)
+    
+    -- Создаем новый ESP
     CreateESP(plr)
     
     ClearPlayerData(plr)
@@ -340,26 +324,40 @@ local function OnCharacterAdded(plr, char)
 
     local humanoid = Humanoids[plr]
     if humanoid then
-        TrackDeath(plr, humanoid)
+        -- Отслеживаем смерть
+        local diedConn = humanoid.Died:Connect(function()
+            OnPlayerDied(plr)
+        end)
+        
+        if not Connections[plr] then
+            Connections[plr] = {}
+        end
+        table.insert(Connections[plr], diedConn)
+        
+        -- Отслеживаем изменения здоровья
+        local healthChangedConn = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+            PlayerData[plr] = PlayerData[plr] or {}
+            PlayerData[plr].healthChanged = true
+        end)
+        table.insert(Connections[plr], healthChangedConn)
     end
 
     local childAddedConn = char.ChildAdded:Connect(function(child)
         if child:IsA("Humanoid") then
             UpdateHumanoid(plr)
-            TrackDeath(plr, child)
         end
     end)
     table.insert(Connections[plr], childAddedConn)
 
     local charRemovedConn = char.AncestryChanged:Connect(function()
         if not char.Parent then
-            -- Персонаж удален - удаляем ESP
-            DestroyESP(plr)
+            -- Персонаж удален (смерть или выход)
+            OnPlayerDied(plr)
         end
     end)
     table.insert(Connections[plr], charRemovedConn)
     
-    HasCharacter[plr] = true
+    PlayerState[plr] = "alive"
 end
 
 -- Обработка добавления игрока
@@ -367,6 +365,8 @@ local function OnPlayerAdded(plr)
     if plr == LocalPlayer then
         return
     end
+
+    PlayerState[plr] = "respawning"
 
     -- Создаем соединение для появления персонажа
     local charAddedConn = plr.CharacterAdded:Connect(function(char)
@@ -377,6 +377,12 @@ local function OnPlayerAdded(plr)
         Connections[plr] = {}
     end
     table.insert(Connections[plr], charAddedConn)
+
+    -- Создаем соединение для начала респавна
+    local charRemovingConn = plr.CharacterRemoving:Connect(function()
+        OnPlayerRespawning(plr)
+    end)
+    table.insert(Connections[plr], charRemovingConn)
 
     -- Если персонаж уже есть - обрабатываем его сразу
     if plr.Character then
@@ -421,7 +427,8 @@ RunService.RenderStepped:Connect(function()
             continue
         end
 
-        if not ESP.Settings.Enabled then
+        -- Проверяем состояние игрока
+        if PlayerState[plr] ~= "alive" then
             box.Visible = false
             if Names[plr] then Names[plr].Visible = false end
             if HealthBars[plr] then
@@ -432,8 +439,7 @@ RunService.RenderStepped:Connect(function()
             continue
         end
 
-        -- Проверяем есть ли персонаж
-        if not HasCharacter[plr] then
+        if not ESP.Settings.Enabled then
             box.Visible = false
             if Names[plr] then Names[plr].Visible = false end
             if HealthBars[plr] then
@@ -641,7 +647,7 @@ for _, plr in Players:GetPlayers() do
     end
 end
 
-print("ESP loaded - creates ESP for all players with characters")
+print("ESP loaded - handles death and respawn properly")
 print("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
 
 return ESP
