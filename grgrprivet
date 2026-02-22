@@ -8,22 +8,23 @@ local RunService = game:GetService("RunService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
--- Настройки ESP (изменяйте их в любое время - всё обновится автоматически)
+-- Настройки ESP
 ESP.Settings = {
-    Enabled = true,           -- Включить/выключить ESP
-    EspBox = true,            -- Показывать бокс
-    EspName = true,           -- Показывать имя
-    EspHealthBar = true,      -- Показывать полоску здоровья
-    EspHealthText = true,     -- Показывать текст здоровья
-    BoxColor = Color3.fromRGB(255, 0, 0),        -- Цвет бокса
-    NameColor = Color3.fromRGB(255, 255, 255),   -- Цвет имени
-    HealthBarWidth = 6,       -- Ширина полоски здоровья
-    OutlineColor = Color3.fromRGB(0, 0, 0),      -- Цвет обводки
-    Transparency = 1,         -- Прозрачность
-    ShowTeammates = false,    -- Показывать тиммейтов
-    ShowEnemies = true,       -- Показывать врагов
-    ShowSelf = false,         -- Показывать себя
-    BoxThickness = 1.6,       -- Толщина бокса
+    Enabled = true,
+    EspBox = true,
+    EspName = true,
+    EspHealthBar = true,
+    EspHealthText = true,
+    BoxColor = Color3.fromRGB(255, 0, 0),
+    NameColor = Color3.fromRGB(255, 255, 255),
+    HealthBarWidth = 6,
+    OutlineColor = Color3.fromRGB(0, 0, 0),
+    Transparency = 1,
+    ShowTeammates = false,
+    ShowEnemies = true,
+    ShowSelf = false,
+    BoxThickness = 1.6,
+    MaxRenderDistance = 1000, -- Максимальная дистанция отрисовки
 }
 
 -- Внутренние переменные
@@ -34,6 +35,17 @@ local HealthTexts = {}
 local Humanoids = {}
 local Connections = {}
 local PlayerData = {}
+
+-- Кэш для оптимизации
+local Vector2new = Vector2.new
+local Color3fromRGB = Color3.fromRGB
+local math_min = math.min
+local math_max = math.max
+local math_abs = math.abs
+local math_floor = math.floor
+local tick = tick
+local pairs = pairs
+local continue = continue -- для луау
 
 -- Функция для проверки, враг ли игрок
 local function IsEnemy(plr)
@@ -139,6 +151,15 @@ local function HideAllESP(plr)
     end
 end
 
+-- Проверка, находится ли точка на экране (ОПТИМИЗИРОВАНО)
+local function IsOnScreen(position)
+    local screenPoint = Camera:WorldToViewportPoint(position)
+    -- Проверяем, что точка перед камерой и в пределах экрана
+    return screenPoint.Z > 0 and screenPoint.Z < ESP.Settings.MaxRenderDistance 
+           and screenPoint.X >= 0 and screenPoint.X <= Camera.ViewportSize.X
+           and screenPoint.Y >= 0 and screenPoint.Y <= Camera.ViewportSize.Y
+end
+
 -- Создание ESP для игрока
 local function CreateESP(plr)
     if Boxes[plr] then return end
@@ -167,7 +188,7 @@ local function CreateESP(plr)
     local healthBarBg = Drawing.new("Square")
     healthBarBg.Thickness = 1
     healthBarBg.Filled = true
-    healthBarBg.Color = Color3.fromRGB(0, 0, 0)
+    healthBarBg.Color = Color3fromRGB(0, 0, 0)
     healthBarBg.Transparency = 0.7
     healthBarBg.Visible = false
     HealthBars[plr] = {bg = healthBarBg, fill = nil}
@@ -176,7 +197,7 @@ local function CreateESP(plr)
     local healthBarFill = Drawing.new("Square")
     healthBarFill.Thickness = 1
     healthBarFill.Filled = true
-    healthBarFill.Color = Color3.fromRGB(0, 255, 0)
+    healthBarFill.Color = Color3fromRGB(0, 255, 0)
     healthBarFill.Transparency = 0.7
     healthBarFill.Visible = false
     HealthBars[plr].fill = healthBarFill
@@ -184,7 +205,7 @@ local function CreateESP(plr)
     -- Create health text
     local healthText = Drawing.new("Text")
     healthText.Size = 14
-    healthText.Color = Color3.fromRGB(255, 255, 255)
+    healthText.Color = Color3fromRGB(255, 255, 255)
     healthText.Center = true
     healthText.Outline = true
     healthText.OutlineColor = ESP.Settings.OutlineColor
@@ -220,19 +241,18 @@ local function RemoveESP(plr)
     ClearConnections(plr)
 end
 
--- Получение цвета здоровья (УЛУЧШЕНО)
+-- Получение цвета здоровья
 local function GetHealthColor(percent)
-    -- Принудительно нормализуем процент
-    percent = math.max(0, math.min(1, percent))
+    percent = math_max(0, math_min(1, percent))
     
     if percent > 0.6 then
-        return Color3.fromRGB(0, 255, 0) -- Ярко зеленый
+        return Color3fromRGB(0, 255, 0)
     elseif percent > 0.3 then
-        return Color3.fromRGB(255, 255, 0) -- Ярко желтый
+        return Color3fromRGB(255, 255, 0)
     elseif percent > 0.1 then
-        return Color3.fromRGB(255, 100, 0) -- Оранжевый для критического
+        return Color3fromRGB(255, 100, 0)
     else
-        return Color3.fromRGB(255, 0, 0) -- Ярко красный
+        return Color3fromRGB(255, 0, 0)
     end
 end
 
@@ -265,28 +285,24 @@ local function GetSafeHealthValues(humanoid)
     return health, maxHealth
 end
 
--- Функция для принудительного обновления цвета полоски здоровья (НОВАЯ)
+-- Функция для обновления цвета полоски здоровья
 local function UpdateHealthBarColor(plr, healthPercent)
     if not HealthBars[plr] or not HealthBars[plr].fill then return end
     
     local fillBar = HealthBars[plr].fill
     fillBar.Color = GetHealthColor(healthPercent)
-    
-    -- Принудительно обновляем видимость, чтобы цвет применился
     fillBar.Visible = fillBar.Visible
 end
 
--- Отслеживание смерти и изменений здоровья (УЛУЧШЕНО)
+-- Отслеживание смерти и изменений здоровья
 local function TrackDeath(plr, humanoid)
     if not humanoid then return end
 
-    -- Отслеживаем изменения здоровья для обновления цвета
     local healthChangedConn = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
         if Humanoids[plr] == humanoid then
             local health, maxHealth = GetSafeHealthValues(humanoid)
             if maxHealth > 0 then
-                local healthPercent = health / maxHealth
-                UpdateHealthBarColor(plr, healthPercent)
+                UpdateHealthBarColor(plr, health / maxHealth)
             end
         end
     end)
@@ -296,7 +312,6 @@ local function TrackDeath(plr, humanoid)
     end
     table.insert(Connections[plr], healthChangedConn)
 
-    -- Отслеживаем смерть
     local diedConn
     diedConn = humanoid.Died:Connect(function()
         ClearPlayerData(plr)
@@ -314,7 +329,7 @@ local function TrackDeath(plr, humanoid)
     table.insert(Connections[plr], diedConn)
 end
 
--- Обработка добавления персонажа (УЛУЧШЕНО)
+-- Обработка добавления персонажа
 local function OnCharacterAdded(plr, char)
     ClearPlayerData(plr)
     ClearConnections(plr)
@@ -329,7 +344,6 @@ local function OnCharacterAdded(plr, char)
     if humanoid then
         TrackDeath(plr, humanoid)
         
-        -- Принудительно обновляем цвет при создании персонажа
         local health, maxHealth = GetSafeHealthValues(humanoid)
         if maxHealth > 0 then
             UpdateHealthBarColor(plr, health / maxHealth)
@@ -341,7 +355,6 @@ local function OnCharacterAdded(plr, char)
             UpdateHumanoid(plr)
             TrackDeath(plr, child)
             
-            -- Обновляем цвет для нового Humanoid
             local health, maxHealth = GetSafeHealthValues(child)
             if maxHealth > 0 then
                 UpdateHealthBarColor(plr, health / maxHealth)
@@ -402,12 +415,11 @@ local function OnPlayerAdded(plr)
     end
 end
 
--- Отслеживаем изменения в настройках (для автоматического обновления)
+-- Отслеживаем изменения в настройках
 local SettingsMetatable = {
     __newindex = function(t, key, value)
         rawset(t, key, value)
 
-        -- Автоматически обновляем соответствующие элементы при изменении настроек
         if key == "BoxColor" or key == "BoxThickness" then
             for _, box in pairs(Boxes) do
                 if box then
@@ -431,20 +443,24 @@ local SettingsMetatable = {
     end
 }
 
--- Применяем метатаблицу к настройкам
 setmetatable(ESP.Settings, SettingsMetatable)
 
--- Основной цикл обновления (УЛУЧШЕНО)
+-- Оптимизированный основной цикл обновления
 RunService.RenderStepped:Connect(function()
-    for plr, box in pairs(Boxes) do
-        -- Проверяем, нужно ли показывать этого игрока
-        if plr == LocalPlayer and not ESP.Settings.ShowSelf then
+    -- Быстрая проверка глобального состояния
+    if not ESP.Settings.Enabled then
+        -- Если ESP выключен, быстро прячем всё
+        for plr, _ in pairs(Boxes) do
             HideAllESP(plr)
-            continue
         end
+        return
+    end
 
-        -- Если ESP выключен, прячем всё
-        if not ESP.Settings.Enabled then
+    local viewportSize = Camera.ViewportSize
+    
+    for plr, box in pairs(Boxes) do
+        -- Пропускаем себя если не нужно показывать
+        if plr == LocalPlayer and not ESP.Settings.ShowSelf then
             HideAllESP(plr)
             continue
         end
@@ -454,11 +470,13 @@ RunService.RenderStepped:Connect(function()
         local healthText = HealthTexts[plr]
         local char = plr.Character
 
+        -- Быстрая проверка персонажа
         if not char or not char.Parent then
             ClearPlayerData(plr)
             continue
         end
 
+        -- Получаем части с кэшированием
         local hrp = char:FindFirstChild("HumanoidRootPart")
         local head = char:FindFirstChild("Head")
 
@@ -467,13 +485,14 @@ RunService.RenderStepped:Connect(function()
             continue
         end
 
+        -- Проверка на врага
         if not IsEnemy(plr) then
             HideAllESP(plr)
             continue
         end
 
+        -- Получаем Humanoid
         local humanoid = Humanoids[plr]
-
         if not humanoid or not humanoid.Parent then
             if not UpdateHumanoid(plr) then
                 HideAllESP(plr)
@@ -482,30 +501,51 @@ RunService.RenderStepped:Connect(function()
             humanoid = Humanoids[plr]
         end
 
-        local health, maxHealth = GetSafeHealthValues(humanoid)
+        -- Получаем позиции (только один раз)
+        local rootPos = Camera:WorldToViewportPoint(hrp.Position)
+        
+        -- Проверка видимости (оптимизировано)
+        if rootPos.Z <= 0 or rootPos.Z > ESP.Settings.MaxRenderDistance then
+            HideAllESP(plr)
+            continue
+        end
 
+        -- Проверка на границах экрана
+        if rootPos.X < -50 or rootPos.X > viewportSize.X + 50 
+           or rootPos.Y < -50 or rootPos.Y > viewportSize.Y + 50 then
+            HideAllESP(plr)
+            continue
+        end
+
+        -- Получаем остальные позиции
+        local headPos = Camera:WorldToViewportPoint(head.Position + Vector3new(0, 0.6, 0))
+        local legPos = Camera:WorldToViewportPoint(hrp.Position - Vector3new(0, 3.5, 0))
+
+        -- Вычисляем размеры
+        local height = math_abs(headPos.Y - legPos.Y)
+        
+        -- Защита от слишком маленьких размеров
+        if height < 10 then
+            height = 30 -- Минимальная высота
+        end
+        
+        local width = height * 0.55
+        
+        -- Получаем здоровье
+        local health, maxHealth = GetSafeHealthValues(humanoid)
+        
+        -- Проверка здоровья
         if health <= 0 or maxHealth <= 0 then
             HideAllESP(plr)
             continue
         end
+        
+        local healthPercent = math_max(0, math_min(1, health / maxHealth))
 
-        local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.6, 0))
-        local rootPos = Camera:WorldToViewportPoint(hrp.Position)
-        local legPos = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3.5, 0))
-
-        if rootPos.Z < 0 then
-            HideAllESP(plr)
-            continue
-        end
-
-        local height = math.abs(headPos.Y - legPos.Y)
-        local width = height * 0.55
-        local healthPercent = math.max(0, math.min(1, health / maxHealth))
-
-        -- Обновляем box (с текущими настройками)
+        -- Обновляем box
         if ESP.Settings.EspBox and box then
-            box.Size = Vector2.new(width, height)
-            box.Position = Vector2.new(rootPos.X - width/2, rootPos.Y - height/2)
+            box.Size = Vector2new(width, height)
+            box.Position = Vector2new(rootPos.X - width/2, rootPos.Y - height/2)
             box.Color = ESP.Settings.BoxColor
             box.Thickness = ESP.Settings.BoxThickness
             box.Transparency = ESP.Settings.Transparency
@@ -514,9 +554,9 @@ RunService.RenderStepped:Connect(function()
             box.Visible = false
         end
 
-        -- Обновляем имя (с текущими настройками)
+        -- Обновляем имя
         if ESP.Settings.EspName and nameTag then
-            nameTag.Position = Vector2.new(rootPos.X, rootPos.Y - height/2 - 20)
+            nameTag.Position = Vector2new(rootPos.X, rootPos.Y - height/2 - 20)
             nameTag.Color = ESP.Settings.NameColor
             nameTag.OutlineColor = ESP.Settings.OutlineColor
             nameTag.Visible = true
@@ -524,38 +564,49 @@ RunService.RenderStepped:Connect(function()
             nameTag.Visible = false
         end
 
-        -- Обновляем полоску здоровья (с текущими настройками)
+        -- Обновляем полоску здоровья
         if ESP.Settings.EspHealthBar and healthBar and healthBar.bg and healthBar.fill then
             local barWidth = ESP.Settings.HealthBarWidth
             local barHeight = height
             local barX = rootPos.X - width/2 - barWidth - 2
             local barY = rootPos.Y - height/2
 
-            healthBar.bg.Size = Vector2.new(barWidth, barHeight)
-            healthBar.bg.Position = Vector2.new(barX, barY)
-            healthBar.bg.Visible = true
+            -- Проверяем, что позиции в пределах разумного
+            if barX > -1000 and barX < viewportSize.X + 1000 
+               and barY > -1000 and barY < viewportSize.Y + 1000 then
+                
+                healthBar.bg.Size = Vector2new(barWidth, barHeight)
+                healthBar.bg.Position = Vector2new(barX, barY)
+                healthBar.bg.Visible = true
 
-            local fillHeight = barHeight * healthPercent
+                local fillHeight = barHeight * healthPercent
+                fillHeight = math_max(0, math_min(barHeight, fillHeight))
 
-            -- Принудительно обновляем цвет каждый кадр для надежности
-            healthBar.fill.Color = GetHealthColor(healthPercent)
-            fillHeight = math.max(0, math.min(barHeight, fillHeight))
-
-            healthBar.fill.Size = Vector2.new(barWidth, fillHeight)
-            healthBar.fill.Position = Vector2.new(barX, barY + (barHeight - fillHeight))
-            healthBar.fill.Visible = true
+                healthBar.fill.Color = GetHealthColor(healthPercent)
+                healthBar.fill.Size = Vector2new(barWidth, fillHeight)
+                healthBar.fill.Position = Vector2new(barX, barY + (barHeight - fillHeight))
+                healthBar.fill.Visible = true
+            else
+                healthBar.bg.Visible = false
+                healthBar.fill.Visible = false
+            end
         elseif healthBar then
             if healthBar.bg then healthBar.bg.Visible = false end
             if healthBar.fill then healthBar.fill.Visible = false end
         end
 
-        -- Обновляем текст здоровья (с текущими настройками)
+        -- Обновляем текст здоровья
         if ESP.Settings.EspHealthText and healthText and humanoid then
-            healthText.Color = GetHealthColor(healthPercent)
-            healthText.OutlineColor = ESP.Settings.OutlineColor
-            healthText.Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
-            healthText.Position = Vector2.new(rootPos.X - width/2 - 30, rootPos.Y)
-            healthText.Visible = true
+            local textX = rootPos.X - width/2 - 30
+            if textX > -500 and textX < viewportSize.X + 500 then
+                healthText.Color = GetHealthColor(healthPercent)
+                healthText.OutlineColor = ESP.Settings.OutlineColor
+                healthText.Text = string.format("%d/%d", math_floor(health), math_floor(maxHealth))
+                healthText.Position = Vector2new(textX, rootPos.Y)
+                healthText.Visible = true
+            else
+                healthText.Visible = false
+            end
         elseif healthText then
             healthText.Visible = false
         end
@@ -575,5 +626,4 @@ end
 
 print("ESP loaded with automatic settings update!")
 
--- Возвращаем таблицу ESP
 return ESP
