@@ -25,7 +25,6 @@ ESP.Settings = {
     ShowSelf = false,
     BoxThickness = 1.6,
     MaxRenderDistance = 1000,
-    HideDelay = 0.2, -- Задержка перед скрытием (секунды)
 }
 
 -- Внутренние переменные
@@ -36,10 +35,6 @@ local HealthTexts = {}
 local Humanoids = {}
 local Connections = {}
 local PlayerData = {}
-
--- Для отслеживания видимости
-local LastVisibleTime = {}
-local IsCurrentlyVisible = {}
 
 -- Проверяем режим камеры
 local function IsLockFirstPerson()
@@ -84,8 +79,6 @@ end
 local function ClearPlayerData(plr)
     Humanoids[plr] = nil
     PlayerData[plr] = nil
-    LastVisibleTime[plr] = nil
-    IsCurrentlyVisible[plr] = nil
 end
 
 -- Обновление Humanoid
@@ -134,8 +127,6 @@ local function HideAllESP(plr)
     end
     
     safeHide(HealthTexts[plr])
-    
-    IsCurrentlyVisible[plr] = false
 end
 
 -- Создание ESP для игрока
@@ -184,9 +175,6 @@ local function CreateESP(plr)
     healthText.OutlineColor = ESP.Settings.OutlineColor
     healthText.Visible = false
     HealthTexts[plr] = healthText
-    
-    IsCurrentlyVisible[plr] = false
-    LastVisibleTime[plr] = 0
 end
 
 -- Удаление ESP для игрока
@@ -424,10 +412,8 @@ local SettingsMetatable = {
 
 setmetatable(ESP.Settings, SettingsMetatable)
 
--- Основной цикл
+-- Основной цикл - без сохранения позиций!
 RunService.RenderStepped:Connect(function()
-    local currentTime = tick()
-    
     for plr, box in pairs(Boxes) do
         if plr == LocalPlayer then
             continue
@@ -488,112 +474,111 @@ RunService.RenderStepped:Connect(function()
         local headVisible = IsOnScreen(headScreen)
         local legVisible = IsOnScreen(legScreen)
         
-        -- Игрок видим если хотя бы одна точка на экране
-        local isVisible = rootVisible or headVisible or legVisible
+        -- Если ни одна точка не видна - прячем ESP и выходим!
+        if not rootVisible and not headVisible and not legVisible then
+            HideAllESP(plr)
+            continue
+        end
+
+        -- Проверка дистанции
+        local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
+        if distance > ESP.Settings.MaxRenderDistance then
+            HideAllESP(plr)
+            continue
+        end
+
+        -- Используем доступные координаты
+        local finalRoot = rootVisible and rootScreen or (headVisible and headScreen or legScreen)
+        local finalHead = headVisible and headScreen or (rootVisible and rootScreen or legScreen)
+        local finalLeg = legVisible and legScreen or (rootVisible and rootScreen or headScreen)
         
-        if isVisible then
-            -- Обновляем время последней видимости
-            LastVisibleTime[plr] = currentTime
-            
-            -- Используем доступные координаты
-            local finalRoot = rootVisible and rootScreen or (headVisible and headScreen or legScreen)
-            local finalHead = headVisible and headScreen or (rootVisible and rootScreen or legScreen)
-            local finalLeg = legVisible and legScreen or (rootVisible and rootScreen or headScreen)
-            
-            -- Корректируем Y координаты
-            if not headVisible and rootVisible then
-                finalHead.Y = finalRoot.Y - 50
-            end
-            if not legVisible and rootVisible then
-                finalLeg.Y = finalRoot.Y + 50
-            end
-            
-            -- Вычисляем размеры
-            local height = math.abs(finalHead.Y - finalLeg.Y)
-            local width = height * 0.55
-            
-            -- Защита от слишком маленьких размеров
-            if height < 10 or width < 5 then
-                HideAllESP(plr)
-                continue
-            end
+        -- Корректируем Y координаты
+        if not headVisible and rootVisible then
+            finalHead.Y = finalRoot.Y - 50
+        end
+        if not legVisible and rootVisible then
+            finalLeg.Y = finalRoot.Y + 50
+        end
+        
+        -- Вычисляем размеры
+        local height = math.abs(finalHead.Y - finalLeg.Y)
+        local width = height * 0.55
+        
+        -- Защита от слишком маленьких размеров
+        if height < 10 or width < 5 then
+            HideAllESP(plr)
+            continue
+        end
 
-            -- Проверка дистанции
-            local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
-            if distance > ESP.Settings.MaxRenderDistance then
-                HideAllESP(plr)
-                continue
-            end
+        local healthPercent = health / maxHealth
 
-            local healthPercent = health / maxHealth
+        -- Обновляем бокс
+        if ESP.Settings.EspBox and box then
+            box.Size = Vector2.new(width, height)
+            box.Position = Vector2.new(finalRoot.X - width/2, finalRoot.Y - height/2)
+            box.Color = ESP.Settings.BoxColor
+            box.Thickness = ESP.Settings.BoxThickness
+            box.Transparency = ESP.Settings.Transparency
+            box.Visible = true
+        else
+            box.Visible = false
+        end
 
-            -- Обновляем бокс
-            if ESP.Settings.EspBox and box then
-                box.Size = Vector2.new(width, height)
-                box.Position = Vector2.new(finalRoot.X - width/2, finalRoot.Y - height/2)
-                box.Color = ESP.Settings.BoxColor
-                box.Thickness = ESP.Settings.BoxThickness
-                box.Transparency = ESP.Settings.Transparency
-                box.Visible = true
-                IsCurrentlyVisible[plr] = true
-            end
+        -- Обновляем имя
+        if ESP.Settings.EspName and Names[plr] then
+            Names[plr].Position = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
+            Names[plr].Color = ESP.Settings.NameColor
+            Names[plr].OutlineColor = ESP.Settings.OutlineColor
+            Names[plr].Visible = true
+        else
+            Names[plr].Visible = false
+        end
 
-            -- Обновляем имя
-            if ESP.Settings.EspName and Names[plr] then
-                Names[plr].Position = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
-                Names[plr].Color = ESP.Settings.NameColor
-                Names[plr].OutlineColor = ESP.Settings.OutlineColor
-                Names[plr].Visible = true
-            end
+        -- Обновляем полоску здоровья
+        if ESP.Settings.EspHealthBar and HealthBars[plr] then
+            local barWidth = ESP.Settings.HealthBarWidth
+            local barHeight = height
+            local barX = finalRoot.X - width/2 - barWidth - 2
+            local barY = finalRoot.Y - height/2
 
-            -- Обновляем полоску здоровья
-            if ESP.Settings.EspHealthBar and HealthBars[plr] then
-                local barWidth = ESP.Settings.HealthBarWidth
-                local barHeight = height
-                local barX = finalRoot.X - width/2 - barWidth - 2
-                local barY = finalRoot.Y - height/2
+            local bg = HealthBars[plr].bg
+            local fill = HealthBars[plr].fill
 
-                local bg = HealthBars[plr].bg
-                local fill = HealthBars[plr].fill
-
-                if bg then
-                    bg.Size = Vector2.new(barWidth, barHeight)
-                    bg.Position = Vector2.new(barX, barY)
-                    bg.Visible = true
-                end
-
-                if fill then
-                    local fillHeight = barHeight * healthPercent
-                    fillHeight = math.max(0, math.min(barHeight, fillHeight))
-                    
-                    fill.Color = GetHealthColor(healthPercent)
-                    fill.Size = Vector2.new(barWidth, fillHeight)
-                    fill.Position = Vector2.new(barX, barY + (barHeight - fillHeight))
-                    fill.Visible = true
-                end
+            if bg then
+                bg.Size = Vector2.new(barWidth, barHeight)
+                bg.Position = Vector2.new(barX, barY)
+                bg.Visible = true
+            else
+                bg.Visible = false
             end
 
-            -- Обновляем текст здоровья
-            if ESP.Settings.EspHealthText and HealthTexts[plr] then
-                HealthTexts[plr].Color = GetHealthColor(healthPercent)
-                HealthTexts[plr].OutlineColor = ESP.Settings.OutlineColor
-                HealthTexts[plr].Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
-                HealthTexts[plr].Position = Vector2.new(finalRoot.X - width/2 - 35, finalRoot.Y)
-                HealthTexts[plr].Visible = true
+            if fill then
+                local fillHeight = barHeight * healthPercent
+                fillHeight = math.max(0, math.min(barHeight, fillHeight))
+                
+                fill.Color = GetHealthColor(healthPercent)
+                fill.Size = Vector2.new(barWidth, fillHeight)
+                fill.Position = Vector2.new(barX, barY + (barHeight - fillHeight))
+                fill.Visible = true
+            else
+                fill.Visible = false
             end
         else
-            -- Если игрок не видим, проверяем время с последней видимости
-            if LastVisibleTime[plr] and (currentTime - LastVisibleTime[plr]) < ESP.Settings.HideDelay then
-                -- Еще не прошло время задержки - продолжаем показывать
-                if IsCurrentlyVisible[plr] then
-                    -- Просто ничего не делаем, ESP остается видимым
-                else
-                    HideAllESP(plr)
-                end
-            else
-                -- Прошло время задержки - прячем
-                HideAllESP(plr)
+            if HealthBars[plr] then
+                if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
+                if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
             end
+        end
+
+        -- Обновляем текст здоровья
+        if ESP.Settings.EspHealthText and HealthTexts[plr] then
+            HealthTexts[plr].Color = GetHealthColor(healthPercent)
+            HealthTexts[plr].OutlineColor = ESP.Settings.OutlineColor
+            HealthTexts[plr].Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
+            HealthTexts[plr].Position = Vector2.new(finalRoot.X - width/2 - 35, finalRoot.Y)
+            HealthTexts[plr].Visible = true
+        else
+            HealthTexts[plr].Visible = false
         end
     end
 end)
@@ -609,7 +594,7 @@ for _, plr in Players:GetPlayers() do
     end
 end
 
-print("ESP loaded with proper visibility handling")
+print("ESP loaded - hides immediately when player is off screen")
 print("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
 
 return ESP
