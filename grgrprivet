@@ -35,7 +35,6 @@ local HealthTexts = {}
 local Humanoids = {}
 local Connections = {}
 local PlayerData = {}
-local ActivePlayers = {} -- Список игроков у которых есть ESP
 
 -- Проверяем режим камеры
 local function IsLockFirstPerson()
@@ -116,8 +115,7 @@ local function DestroyESP(plr)
     local function safeDestroy(obj)
         if obj then
             pcall(function() 
-                obj:Remove() -- Remove удаляет Drawing объект
-                obj = nil
+                obj:Remove()
             end)
         end
     end
@@ -139,16 +137,14 @@ local function DestroyESP(plr)
 
     ClearPlayerData(plr)
     ClearConnections(plr)
-    ActivePlayers[plr] = nil
 end
 
--- Создание ESP для игрока
+-- Создание ESP для игрока (ВСЕГДА создаем новые объекты)
 local function CreateESP(plr)
-    if Boxes[plr] then 
-        ActivePlayers[plr] = true
-        return 
-    end
-
+    -- Удаляем старые если есть
+    DestroyESP(plr)
+    
+    -- Создаем новые
     local box = Drawing.new("Square")
     box.Thickness = ESP.Settings.BoxThickness
     box.Filled = false
@@ -191,13 +187,6 @@ local function CreateESP(plr)
     healthText.OutlineColor = ESP.Settings.OutlineColor
     healthText.Visible = false
     HealthTexts[plr] = healthText
-    
-    ActivePlayers[plr] = true
-end
-
--- Удаление ESP для игрока
-local function RemoveESP(plr)
-    DestroyESP(plr)
 end
 
 -- Получение цвета здоровья
@@ -314,7 +303,7 @@ local function TrackDeath(plr, humanoid)
     table.insert(Connections[plr], healthChangedConn)
 
     local diedConn = humanoid.Died:Connect(function()
-        ClearPlayerData(plr)
+        DestroyESP(plr)
         task.wait(2)
         if plr.Character and plr.Character.Parent then
             UpdateHumanoid(plr)
@@ -349,7 +338,7 @@ local function OnCharacterAdded(plr, char)
 
     local charRemovedConn = char.AncestryChanged:Connect(function()
         if not char.Parent then
-            ClearPlayerData(plr)
+            DestroyESP(plr)
         end
     end)
     table.insert(Connections[plr], charRemovedConn)
@@ -360,8 +349,6 @@ local function OnPlayerAdded(plr)
     if plr == LocalPlayer then
         return
     end
-
-    CreateESP(plr)
 
     local charAddedConn = plr.CharacterAdded:Connect(function(char)
         OnCharacterAdded(plr, char)
@@ -383,20 +370,20 @@ local SettingsMetatable = {
         rawset(t, key, value)
 
         if key == "BoxColor" or key == "BoxThickness" then
-            for _, box in pairs(Boxes) do
+            for plr, box in pairs(Boxes) do
                 if box then
                     box.Color = ESP.Settings.BoxColor
                     box.Thickness = ESP.Settings.BoxThickness
                 end
             end
         elseif key == "NameColor" or key == "OutlineColor" then
-            for _, nameTag in pairs(Names) do
+            for plr, nameTag in pairs(Names) do
                 if nameTag then
                     nameTag.Color = ESP.Settings.NameColor
                     nameTag.OutlineColor = ESP.Settings.OutlineColor
                 end
             end
-            for _, healthText in pairs(HealthTexts) do
+            for plr, healthText in pairs(HealthTexts) do
                 if healthText then
                     healthText.OutlineColor = ESP.Settings.OutlineColor
                 end
@@ -409,19 +396,19 @@ setmetatable(ESP.Settings, SettingsMetatable)
 
 -- Основной цикл
 RunService.RenderStepped:Connect(function()
-    for plr, box in pairs(Boxes) do
+    for plr, _ in pairs(Players:GetPlayers()) do
         if plr == LocalPlayer then
             continue
         end
 
         if not ESP.Settings.Enabled then
-            DestroyESP(plr) -- Удаляем, а не просто прячем
+            DestroyESP(plr)
             continue
         end
 
         local char = plr.Character
         if not char or not char.Parent then
-            DestroyESP(plr) -- Удаляем если нет персонажа
+            DestroyESP(plr)
             continue
         end
 
@@ -432,13 +419,13 @@ RunService.RenderStepped:Connect(function()
         local head = char:FindFirstChild("Head")
         
         if not hrp or not head then
-            DestroyESP(plr) -- Удаляем если нет частей
+            DestroyESP(plr)
             continue
         end
 
         -- Проверка на врага
         if not IsEnemy(plr) then
-            DestroyESP(plr) -- Удаляем если не враг
+            DestroyESP(plr)
             continue
         end
 
@@ -446,7 +433,7 @@ RunService.RenderStepped:Connect(function()
         local humanoid = Humanoids[plr]
         if not humanoid or not humanoid.Parent then
             if not UpdateHumanoid(plr) then
-                DestroyESP(plr) -- Удаляем если нет Humanoid
+                DestroyESP(plr)
                 continue
             end
             humanoid = Humanoids[plr]
@@ -455,7 +442,7 @@ RunService.RenderStepped:Connect(function()
         -- Получаем здоровье
         local health, maxHealth = GetSafeHealthValues(humanoid)
         if health <= 0 or maxHealth <= 0 then
-            DestroyESP(plr) -- Удаляем если мертв
+            DestroyESP(plr)
             continue
         end
 
@@ -470,14 +457,14 @@ RunService.RenderStepped:Connect(function()
         local legVisible = IsOnScreen(legScreen)
         
         if not rootVisible and not headVisible and not legVisible then
-            DestroyESP(plr) -- Удаляем если не видим
+            DestroyESP(plr)
             continue
         end
 
         -- Проверка дистанции
         local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
         if distance > ESP.Settings.MaxRenderDistance then
-            DestroyESP(plr) -- Удаляем если далеко
+            DestroyESP(plr)
             continue
         end
 
@@ -485,6 +472,11 @@ RunService.RenderStepped:Connect(function()
         if not Boxes[plr] then
             CreateESP(plr)
         end
+
+        local box = Boxes[plr]
+        local nameTag = Names[plr]
+        local healthBar = HealthBars[plr]
+        local healthText = HealthTexts[plr]
 
         -- Используем доступные координаты
         local finalRoot = rootVisible and rootScreen or (headVisible and headScreen or legScreen)
@@ -505,7 +497,7 @@ RunService.RenderStepped:Connect(function()
         
         -- Защита от слишком маленьких размеров
         if height < 10 or width < 5 then
-            DestroyESP(plr) -- Удаляем если слишком маленький
+            DestroyESP(plr)
             continue
         end
 
@@ -524,24 +516,24 @@ RunService.RenderStepped:Connect(function()
         end
 
         -- Обновляем имя
-        if ESP.Settings.EspName and Names[plr] then
-            Names[plr].Position = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
-            Names[plr].Color = ESP.Settings.NameColor
-            Names[plr].OutlineColor = ESP.Settings.OutlineColor
-            Names[plr].Visible = true
-        elseif Names[plr] then
-            Names[plr].Visible = false
+        if ESP.Settings.EspName and nameTag then
+            nameTag.Position = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
+            nameTag.Color = ESP.Settings.NameColor
+            nameTag.OutlineColor = ESP.Settings.OutlineColor
+            nameTag.Visible = true
+        elseif nameTag then
+            nameTag.Visible = false
         end
 
         -- Обновляем полоску здоровья
-        if ESP.Settings.EspHealthBar and HealthBars[plr] then
+        if ESP.Settings.EspHealthBar and healthBar then
             local barWidth = ESP.Settings.HealthBarWidth
             local barHeight = height
             local barX = finalRoot.X - width/2 - barWidth - 2
             local barY = finalRoot.Y - height/2
 
-            local bg = HealthBars[plr].bg
-            local fill = HealthBars[plr].fill
+            local bg = healthBar.bg
+            local fill = healthBar.fill
 
             if bg then
                 bg.Size = Vector2.new(barWidth, barHeight)
@@ -558,27 +550,27 @@ RunService.RenderStepped:Connect(function()
                 fill.Position = Vector2.new(barX, barY + (barHeight - fillHeight))
                 fill.Visible = true
             end
-        elseif HealthBars[plr] then
-            if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-            if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
+        elseif healthBar then
+            if healthBar.bg then healthBar.bg.Visible = false end
+            if healthBar.fill then healthBar.fill.Visible = false end
         end
 
         -- Обновляем текст здоровья
-        if ESP.Settings.EspHealthText and HealthTexts[plr] then
-            HealthTexts[plr].Color = GetHealthColor(healthPercent)
-            HealthTexts[plr].OutlineColor = ESP.Settings.OutlineColor
-            HealthTexts[plr].Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
-            HealthTexts[plr].Position = Vector2.new(finalRoot.X - width/2 - 35, finalRoot.Y)
-            HealthTexts[plr].Visible = true
-        elseif HealthTexts[plr] then
-            HealthTexts[plr].Visible = false
+        if ESP.Settings.EspHealthText and healthText then
+            healthText.Color = GetHealthColor(healthPercent)
+            healthText.OutlineColor = ESP.Settings.OutlineColor
+            healthText.Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
+            healthText.Position = Vector2.new(finalRoot.X - width/2 - 35, finalRoot.Y)
+            healthText.Visible = true
+        elseif healthText then
+            healthText.Visible = false
         end
     end
 end)
 
 -- Подключаем события
 Players.PlayerAdded:Connect(OnPlayerAdded)
-Players.PlayerRemoving:Connect(RemoveESP)
+Players.PlayerRemoving:Connect(DestroyESP)
 
 -- Обрабатываем уже существующих игроков
 for _, plr in Players:GetPlayers() do
@@ -587,7 +579,7 @@ for _, plr in Players:GetPlayers() do
     end
 end
 
-print("ESP loaded - destroys objects when not visible")
+print("ESP loaded - creates/destroys objects as needed")
 print("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
 
 return ESP
