@@ -35,6 +35,7 @@ local HealthTexts = {}
 local Humanoids = {}
 local Connections = {}
 local PlayerData = {}
+local ActivePlayers = {} -- Список игроков у которых есть ESP
 
 -- Проверяем режим камеры
 local function IsLockFirstPerson()
@@ -110,28 +111,43 @@ local function ClearConnections(plr)
     end
 end
 
--- Спрятать весь ESP для игрока
-local function HideAllESP(plr)
-    local function safeHide(obj)
+-- Функция для реального удаления ESP
+local function DestroyESP(plr)
+    local function safeDestroy(obj)
         if obj then
-            obj.Visible = false
+            pcall(function() 
+                obj:Remove() -- Remove удаляет Drawing объект
+                obj = nil
+            end)
         end
     end
 
-    safeHide(Boxes[plr])
-    safeHide(Names[plr])
+    safeDestroy(Boxes[plr])
+    Boxes[plr] = nil
+    
+    safeDestroy(Names[plr])
+    Names[plr] = nil
     
     if HealthBars[plr] then
-        safeHide(HealthBars[plr].bg)
-        safeHide(HealthBars[plr].fill)
+        safeDestroy(HealthBars[plr].bg)
+        safeDestroy(HealthBars[plr].fill)
+        HealthBars[plr] = nil
     end
     
-    safeHide(HealthTexts[plr])
+    safeDestroy(HealthTexts[plr])
+    HealthTexts[plr] = nil
+
+    ClearPlayerData(plr)
+    ClearConnections(plr)
+    ActivePlayers[plr] = nil
 end
 
 -- Создание ESP для игрока
 local function CreateESP(plr)
-    if Boxes[plr] then return end
+    if Boxes[plr] then 
+        ActivePlayers[plr] = true
+        return 
+    end
 
     local box = Drawing.new("Square")
     box.Thickness = ESP.Settings.BoxThickness
@@ -175,33 +191,13 @@ local function CreateESP(plr)
     healthText.OutlineColor = ESP.Settings.OutlineColor
     healthText.Visible = false
     HealthTexts[plr] = healthText
+    
+    ActivePlayers[plr] = true
 end
 
 -- Удаление ESP для игрока
 local function RemoveESP(plr)
-    local function safeRemove(obj)
-        if obj then
-            pcall(function() obj:Remove() end)
-        end
-    end
-
-    safeRemove(Boxes[plr])
-    Boxes[plr] = nil
-    
-    safeRemove(Names[plr])
-    Names[plr] = nil
-    
-    if HealthBars[plr] then
-        safeRemove(HealthBars[plr].bg)
-        safeRemove(HealthBars[plr].fill)
-        HealthBars[plr] = nil
-    end
-    
-    safeRemove(HealthTexts[plr])
-    HealthTexts[plr] = nil
-
-    ClearPlayerData(plr)
-    ClearConnections(plr)
+    DestroyESP(plr)
 end
 
 -- Получение цвета здоровья
@@ -292,7 +288,6 @@ local function IsOnScreen(screenPos)
         return false
     end
     
-    -- Проверяем что в пределах экрана
     if screenPos.X < 0 or screenPos.X > Camera.ViewportSize.X then
         return false
     end
@@ -412,7 +407,7 @@ local SettingsMetatable = {
 
 setmetatable(ESP.Settings, SettingsMetatable)
 
--- Основной цикл - без сохранения позиций!
+-- Основной цикл
 RunService.RenderStepped:Connect(function()
     for plr, box in pairs(Boxes) do
         if plr == LocalPlayer then
@@ -420,13 +415,13 @@ RunService.RenderStepped:Connect(function()
         end
 
         if not ESP.Settings.Enabled then
-            HideAllESP(plr)
+            DestroyESP(plr) -- Удаляем, а не просто прячем
             continue
         end
 
         local char = plr.Character
         if not char or not char.Parent then
-            HideAllESP(plr)
+            DestroyESP(plr) -- Удаляем если нет персонажа
             continue
         end
 
@@ -437,13 +432,13 @@ RunService.RenderStepped:Connect(function()
         local head = char:FindFirstChild("Head")
         
         if not hrp or not head then
-            HideAllESP(plr)
+            DestroyESP(plr) -- Удаляем если нет частей
             continue
         end
 
         -- Проверка на врага
         if not IsEnemy(plr) then
-            HideAllESP(plr)
+            DestroyESP(plr) -- Удаляем если не враг
             continue
         end
 
@@ -451,7 +446,7 @@ RunService.RenderStepped:Connect(function()
         local humanoid = Humanoids[plr]
         if not humanoid or not humanoid.Parent then
             if not UpdateHumanoid(plr) then
-                HideAllESP(plr)
+                DestroyESP(plr) -- Удаляем если нет Humanoid
                 continue
             end
             humanoid = Humanoids[plr]
@@ -460,7 +455,7 @@ RunService.RenderStepped:Connect(function()
         -- Получаем здоровье
         local health, maxHealth = GetSafeHealthValues(humanoid)
         if health <= 0 or maxHealth <= 0 then
-            HideAllESP(plr)
+            DestroyESP(plr) -- Удаляем если мертв
             continue
         end
 
@@ -469,22 +464,26 @@ RunService.RenderStepped:Connect(function()
         local headScreen = WorldToScreen(head.Position + Vector3.new(0, 0.5, 0))
         local legScreen = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
         
-        -- Проверяем видимость каждой точки
+        -- Проверяем видимость
         local rootVisible = IsOnScreen(rootScreen)
         local headVisible = IsOnScreen(headScreen)
         local legVisible = IsOnScreen(legScreen)
         
-        -- Если ни одна точка не видна - прячем ESP и выходим!
         if not rootVisible and not headVisible and not legVisible then
-            HideAllESP(plr)
+            DestroyESP(plr) -- Удаляем если не видим
             continue
         end
 
         -- Проверка дистанции
         local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
         if distance > ESP.Settings.MaxRenderDistance then
-            HideAllESP(plr)
+            DestroyESP(plr) -- Удаляем если далеко
             continue
+        end
+
+        -- Если дошли до сюда - создаем ESP если его нет
+        if not Boxes[plr] then
+            CreateESP(plr)
         end
 
         -- Используем доступные координаты
@@ -506,7 +505,7 @@ RunService.RenderStepped:Connect(function()
         
         -- Защита от слишком маленьких размеров
         if height < 10 or width < 5 then
-            HideAllESP(plr)
+            DestroyESP(plr) -- Удаляем если слишком маленький
             continue
         end
 
@@ -520,7 +519,7 @@ RunService.RenderStepped:Connect(function()
             box.Thickness = ESP.Settings.BoxThickness
             box.Transparency = ESP.Settings.Transparency
             box.Visible = true
-        else
+        elseif box then
             box.Visible = false
         end
 
@@ -530,7 +529,7 @@ RunService.RenderStepped:Connect(function()
             Names[plr].Color = ESP.Settings.NameColor
             Names[plr].OutlineColor = ESP.Settings.OutlineColor
             Names[plr].Visible = true
-        else
+        elseif Names[plr] then
             Names[plr].Visible = false
         end
 
@@ -548,8 +547,6 @@ RunService.RenderStepped:Connect(function()
                 bg.Size = Vector2.new(barWidth, barHeight)
                 bg.Position = Vector2.new(barX, barY)
                 bg.Visible = true
-            else
-                bg.Visible = false
             end
 
             if fill then
@@ -560,14 +557,10 @@ RunService.RenderStepped:Connect(function()
                 fill.Size = Vector2.new(barWidth, fillHeight)
                 fill.Position = Vector2.new(barX, barY + (barHeight - fillHeight))
                 fill.Visible = true
-            else
-                fill.Visible = false
             end
-        else
-            if HealthBars[plr] then
-                if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-                if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-            end
+        elseif HealthBars[plr] then
+            if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
+            if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
         end
 
         -- Обновляем текст здоровья
@@ -577,7 +570,7 @@ RunService.RenderStepped:Connect(function()
             HealthTexts[plr].Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
             HealthTexts[plr].Position = Vector2.new(finalRoot.X - width/2 - 35, finalRoot.Y)
             HealthTexts[plr].Visible = true
-        else
+        elseif HealthTexts[plr] then
             HealthTexts[plr].Visible = false
         end
     end
@@ -594,7 +587,7 @@ for _, plr in Players:GetPlayers() do
     end
 end
 
-print("ESP loaded - hides immediately when player is off screen")
+print("ESP loaded - destroys objects when not visible")
 print("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
 
 return ESP
