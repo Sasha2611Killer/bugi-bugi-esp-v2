@@ -7,7 +7,6 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
-local UserInputService = game:GetService("UserInputService")
 
 -- Настройки ESP
 ESP.Settings = {
@@ -23,7 +22,7 @@ ESP.Settings = {
     Transparency = 1,
     ShowTeammates = false,
     ShowEnemies = true,
-    ShowSelf = false,  -- Себя не показываем в любом случае
+    ShowSelf = false,  -- Себя не показываем
     BoxThickness = 1.6,
     MaxRenderDistance = 1000,
 }
@@ -37,31 +36,11 @@ local Humanoids = {}
 local Connections = {}
 local PlayerData = {}
 
--- Определяем режим камеры как в оригинальном коде
-local function GetCameraMode()
-    if not LocalPlayer then return "Classic" end
-    
-    -- Смотрим на CameraMode как в оригинале
-    if LocalPlayer.CameraMode == Enum.CameraMode.LockFirstPerson then
-        -- В оригинале они используют Classic режим даже при LockFirstPerson
-        return "Classic"
-    elseif LocalPlayer.CameraMode == Enum.CameraMode.Classic then
-        return "Classic"
-    end
-    return "Classic"
-end
-
--- Проверка, в первом лице ли сейчас камера
-local function IsFirstPersonActive()
-    local mode = GetCameraMode()
-    if mode == "Classic" then
-        -- В Classic режиме проверяем расстояние камеры
-        if Camera and Camera.Focus and Camera.CFrame then
-            local distance = (Camera.CFrame.Position - Camera.Focus.Position).Magnitude
-            return distance < 2 -- Если камера близко - значит первое лицо
-        end
-    end
-    return mode == "LockFirstPerson"
+-- Проверяем режим камеры игрока (CameraMode, а не CameraType!)
+local function IsLockFirstPerson()
+    if not LocalPlayer then return false end
+    -- Проверяем именно CameraMode у локального игрока
+    return LocalPlayer.CameraMode == Enum.CameraMode.LockFirstPerson
 end
 
 -- Функция для проверки, враг ли игрок
@@ -442,9 +421,19 @@ local SettingsMetatable = {
 
 setmetatable(ESP.Settings, SettingsMetatable)
 
+-- Отслеживаем изменение CameraMode у локального игрока
+if LocalPlayer then
+    LocalPlayer:GetPropertyChangedSignal("CameraMode"):Connect(function()
+        -- Просто логируем, ничего не меняем в ESP
+        print("CameraMode changed to:", LocalPlayer.CameraMode)
+    end)
+end
+
 -- Основной цикл - только для других игроков
 RunService.RenderStepped:Connect(function()
-    -- Никогда не обрабатываем локального игрока
+    -- Проверяем режим камеры (просто для информации)
+    local isFirstPerson = IsLockFirstPerson()
+    
     for plr, box in pairs(Boxes) do
         if plr == LocalPlayer then
             continue
@@ -618,6 +607,7 @@ for _, plr in Players:GetPlayers() do
     end
 end
 
-print("ESP loaded with proper LockFirstPerson support (only shows other players)")
+print("ESP loaded - shows only other players, ignores self completely")
+print("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
 
 return ESP
