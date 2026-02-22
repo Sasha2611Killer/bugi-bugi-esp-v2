@@ -22,9 +22,10 @@ ESP.Settings = {
     Transparency = 1,
     ShowTeammates = false,
     ShowEnemies = true,
-    ShowSelf = false,  -- Себя не показываем
+    ShowSelf = false,
     BoxThickness = 1.6,
     MaxRenderDistance = 1000,
+    SmoothTime = 0.1, -- Время сглаживания в секундах
 }
 
 -- Внутренние переменные
@@ -36,11 +37,28 @@ local Humanoids = {}
 local Connections = {}
 local PlayerData = {}
 
--- Проверяем режим камеры игрока (CameraMode, а не CameraType!)
+-- Для хранения плавных позиций
+local SmoothPositions = {}
+local SmoothSizes = {}
+local LastUpdateTime = tick()
+
+-- Функция для интерполяции
+local function Lerp(a, b, t)
+    return a + (b - a) * t
+end
+
+local function LerpVector2(a, b, t)
+    if not a then return b end
+    if not b then return a end
+    return Vector2.new(
+        Lerp(a.X, b.X, t),
+        Lerp(a.Y, b.Y, t)
+    )
+end
+
+-- Проверяем режим камеры
 local function IsLockFirstPerson()
-    if not LocalPlayer then return false end
-    -- Проверяем именно CameraMode у локального игрока
-    return LocalPlayer.CameraMode == Enum.CameraMode.LockFirstPerson
+    return LocalPlayer and LocalPlayer.CameraMode == Enum.CameraMode.LockFirstPerson
 end
 
 -- Функция для проверки, враг ли игрок
@@ -53,7 +71,6 @@ local function IsEnemy(plr)
     local theirChar = plr.Character
     if not myChar or not theirChar then return false end
 
-    -- Получаем команды
     local myTeam = "Enemy"
     local theirTeam = "Enemy"
     
@@ -69,13 +86,7 @@ local function IsEnemy(plr)
         end
     end)
 
-    local isEnemy = myTeam ~= theirTeam
-
-    if isEnemy then
-        return ESP.Settings.ShowEnemies
-    else
-        return ESP.Settings.ShowTeammates
-    end
+    return myTeam ~= theirTeam
 end
 
 -- Функция для получения Humanoid
@@ -88,6 +99,8 @@ end
 local function ClearPlayerData(plr)
     Humanoids[plr] = nil
     PlayerData[plr] = nil
+    SmoothPositions[plr] = nil
+    SmoothSizes[plr] = nil
 end
 
 -- Обновление Humanoid
@@ -250,7 +263,7 @@ local function GetSafeHealthValues(humanoid)
     return health, maxHealth
 end
 
--- Функция для конвертации 3D в 2D
+-- Функция для конвертации 3D в 2D с учетом режима камеры
 local function WorldToScreen(position)
     local success, result = pcall(function()
         return Camera:WorldToViewportPoint(position)
@@ -295,17 +308,17 @@ local function WorldToScreen(position)
     }
 end
 
--- Проверка видимости
+-- Проверка валидности позиции
 local function IsPositionValid(screenPos)
     if not screenPos.Visible or screenPos.Z <= 0.1 then
         return false
     end
     
-    if screenPos.X < 0 or screenPos.X > Camera.ViewportSize.X then
+    if screenPos.X < -50 or screenPos.X > Camera.ViewportSize.X + 50 then
         return false
     end
     
-    if screenPos.Y < 0 or screenPos.Y > Camera.ViewportSize.Y then
+    if screenPos.Y < -50 or screenPos.Y > Camera.ViewportSize.Y + 50 then
         return false
     end
     
@@ -370,7 +383,6 @@ end
 
 -- Обработка добавления игрока
 local function OnPlayerAdded(plr)
-    -- Никогда не создаем ESP для себя
     if plr == LocalPlayer then
         return
     end
@@ -421,17 +433,10 @@ local SettingsMetatable = {
 
 setmetatable(ESP.Settings, SettingsMetatable)
 
--- Отслеживаем изменение CameraMode у локального игрока
-if LocalPlayer then
-    LocalPlayer:GetPropertyChangedSignal("CameraMode"):Connect(function()
-        -- Просто логируем, ничего не меняем в ESP
-        print("CameraMode changed to:", LocalPlayer.CameraMode)
-    end)
-end
-
--- Основной цикл - только для других игроков
-RunService.RenderStepped:Connect(function()
-    -- Проверяем режим камеры (просто для информации)
+-- Основной цикл с плавным движением
+RunService.RenderStepped:Connect(function(dt)
+    local currentTime = tick()
+    local smoothFactor = math.min(1, dt / ESP.Settings.SmoothTime)
     local isFirstPerson = IsLockFirstPerson()
     
     for plr, box in pairs(Boxes) do
@@ -450,13 +455,26 @@ RunService.RenderStepped:Connect(function()
             continue
         end
 
-        -- Получаем части персонажа
-        local hrp = char:FindFirstChild("HumanoidRootPart") or 
-                    char:FindFirstChild("Torso") or 
-                    char:FindFirstChild("UpperTorso")
-        local head = char:FindFirstChild("Head")
+        -- В LockFirstPerson используем другие части для более стабильной позиции
+        local hrp, head
         
-        if not hrp or not head then
+        if isFirstPerson then
+            -- В первом лице используем корневые части для стабильности
+            hrp = char:FindFirstChild("HumanoidRootPart") or 
+                  char:FindFirstChild("Torso") or 
+                  char:FindFirstChild("UpperTorso") or
+                  char:FindFirstChild("LowerTorso")
+            
+            -- Для головы используем смещение от корпуса
+            head = char:FindFirstChild("Head") or hrp
+        else
+            hrp = char:FindFirstChild("HumanoidRootPart") or 
+                  char:FindFirstChild("Torso") or 
+                  char:FindFirstChild("UpperTorso")
+            head = char:FindFirstChild("Head")
+        end
+        
+        if not hrp then
             HideAllESP(plr)
             continue
         end
@@ -486,40 +504,64 @@ RunService.RenderStepped:Connect(function()
 
         -- Получаем позиции на экране
         local rootScreen = WorldToScreen(hrp.Position)
-        local headScreen = WorldToScreen(head.Position + Vector3.new(0, 0.5, 0))
-        local legScreen = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
         
-        -- Проверяем видимость
+        -- Для высоты используем разные методы в зависимости от режима
+        local topPos, bottomPos
+        
+        if isFirstPerson and head then
+            -- В первом лице: верх = голова + смещение, низ = корпус - смещение
+            topPos = WorldToScreen(head.Position + Vector3.new(0, 0.8, 0))
+            bottomPos = WorldToScreen(hrp.Position - Vector3.new(0, 2.5, 0))
+        else
+            -- Обычный режим
+            topPos = head and WorldToScreen(head.Position + Vector3.new(0, 0.5, 0)) or rootScreen
+            bottomPos = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
+        end
+        
+        -- Проверяем видимость (с запасом)
         local rootValid = IsPositionValid(rootScreen)
-        local headValid = IsPositionValid(headScreen)
-        local legValid = IsPositionValid(legScreen)
+        local topValid = IsPositionValid(topPos)
+        local bottomValid = IsPositionValid(bottomPos)
         
-        if not rootValid and not headValid and not legValid then
-            HideAllESP(plr)
+        -- Если ничего не видно, но было видно ранее - держим последнюю позицию
+        if not rootValid and not topValid and not bottomValid then
+            if SmoothPositions[plr] and SmoothSizes[plr] then
+                -- Продолжаем показывать на последней позиции
+                if ESP.Settings.EspBox and box then
+                    box.Position = SmoothPositions[plr]
+                    box.Size = SmoothSizes[plr]
+                    box.Visible = true
+                end
+            else
+                HideAllESP(plr)
+            end
             continue
         end
 
-        -- Используем доступные координаты
-        local finalRoot = rootValid and rootScreen or (headValid and headScreen or legScreen)
-        local finalHead = headValid and headScreen or (rootValid and rootScreen or legScreen)
-        local finalLeg = legValid and legScreen or (rootValid and rootScreen or headScreen)
+        -- Выбираем лучшие доступные позиции
+        local finalRoot = rootValid and rootScreen or (topValid and topPos or bottomPos)
+        local finalTop = topValid and topPos or (rootValid and rootScreen or bottomPos)
+        local finalBottom = bottomValid and bottomPos or (rootValid and rootScreen or topPos)
         
-        -- Корректируем Y координаты
-        if not headValid and rootValid then
-            finalHead.Y = finalRoot.Y - 50
-        end
-        if not legValid and rootValid then
-            finalLeg.Y = finalRoot.Y + 50
-        end
-        
-        -- Вычисляем размеры
-        local height = math.abs(finalHead.Y - finalLeg.Y)
+        -- Вычисляем высоту и ширину
+        local height = math.abs(finalTop.Y - finalBottom.Y)
         local width = height * 0.55
         
-        -- Защита от слишком маленьких размеров
-        if height < 10 or width < 5 then
-            HideAllESP(plr)
-            continue
+        -- Защита от экстремальных размеров
+        height = math.max(15, math.min(500, height))
+        width = math.max(8, math.min(275, width))
+        
+        -- Вычисляем позицию бокса
+        local newPos = Vector2.new(finalRoot.X - width/2, finalRoot.Y - height/2)
+        local newSize = Vector2.new(width, height)
+        
+        -- Плавное движение
+        if not SmoothPositions[plr] then
+            SmoothPositions[plr] = newPos
+            SmoothSizes[plr] = newSize
+        else
+            SmoothPositions[plr] = LerpVector2(SmoothPositions[plr], newPos, smoothFactor * 5)
+            SmoothSizes[plr] = LerpVector2(SmoothSizes[plr], newSize, smoothFactor * 5)
         end
 
         -- Проверка дистанции
@@ -531,10 +573,10 @@ RunService.RenderStepped:Connect(function()
 
         local healthPercent = health / maxHealth
 
-        -- Обновляем бокс
+        -- Обновляем бокс с плавными позициями
         if ESP.Settings.EspBox and box then
-            box.Size = Vector2.new(width, height)
-            box.Position = Vector2.new(finalRoot.X - width/2, finalRoot.Y - height/2)
+            box.Position = SmoothPositions[plr]
+            box.Size = SmoothSizes[plr]
             box.Color = ESP.Settings.BoxColor
             box.Thickness = ESP.Settings.BoxThickness
             box.Transparency = ESP.Settings.Transparency
@@ -543,9 +585,10 @@ RunService.RenderStepped:Connect(function()
             box.Visible = false
         end
 
-        -- Обновляем имя
+        -- Обновляем имя (тоже с плавным движением)
         if ESP.Settings.EspName and Names[plr] then
-            Names[plr].Position = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
+            local namePos = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
+            Names[plr].Position = namePos
             Names[plr].Color = ESP.Settings.NameColor
             Names[plr].OutlineColor = ESP.Settings.OutlineColor
             Names[plr].Visible = true
@@ -607,7 +650,7 @@ for _, plr in Players:GetPlayers() do
     end
 end
 
-print("ESP loaded - shows only other players, ignores self completely")
+print("ESP loaded with smooth movement for LockFirstPerson")
 print("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
 
 return ESP
