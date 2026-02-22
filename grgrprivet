@@ -24,7 +24,7 @@ ESP.Settings = {
     ShowEnemies = true,
     ShowSelf = false,
     BoxThickness = 1.6,
-    MaxRenderDistance = 1000, -- Максимальная дистанция отрисовки
+    MaxRenderDistance = 500, -- Максимальная дистанция отрисовки
 }
 
 -- Внутренние переменные
@@ -45,7 +45,8 @@ local math_abs = math.abs
 local math_floor = math.floor
 local tick = tick
 local pairs = pairs
-local continue = continue -- для луау
+local next = next
+local type = type
 
 -- Функция для проверки, враг ли игрок
 local function IsEnemy(plr)
@@ -151,13 +152,11 @@ local function HideAllESP(plr)
     end
 end
 
--- Проверка, находится ли точка на экране (ОПТИМИЗИРОВАНО)
-local function IsOnScreen(position)
+-- Проверка, виден ли персонаж на экране (УПРОЩЕНО)
+local function IsVisible(position)
     local screenPoint = Camera:WorldToViewportPoint(position)
-    -- Проверяем, что точка перед камерой и в пределах экрана
-    return screenPoint.Z > 0 and screenPoint.Z < ESP.Settings.MaxRenderDistance 
-           and screenPoint.X >= 0 and screenPoint.X <= Camera.ViewportSize.X
-           and screenPoint.Y >= 0 and screenPoint.Y <= Camera.ViewportSize.Y
+    -- Проверяем, что точка перед камерой (Z > 0) и в пределах экрана
+    return screenPoint.Z > 0
 end
 
 -- Создание ESP для игрока
@@ -445,7 +444,7 @@ local SettingsMetatable = {
 
 setmetatable(ESP.Settings, SettingsMetatable)
 
--- Оптимизированный основной цикл обновления
+-- Основной цикл обновления
 RunService.RenderStepped:Connect(function()
     -- Быстрая проверка глобального состояния
     if not ESP.Settings.Enabled then
@@ -476,7 +475,7 @@ RunService.RenderStepped:Connect(function()
             continue
         end
 
-        -- Получаем части с кэшированием
+        -- Получаем части
         local hrp = char:FindFirstChild("HumanoidRootPart")
         local head = char:FindFirstChild("Head")
 
@@ -501,18 +500,11 @@ RunService.RenderStepped:Connect(function()
             humanoid = Humanoids[plr]
         end
 
-        -- Получаем позиции (только один раз)
+        -- Получаем позицию корня
         local rootPos = Camera:WorldToViewportPoint(hrp.Position)
         
-        -- Проверка видимости (оптимизировано)
-        if rootPos.Z <= 0 or rootPos.Z > ESP.Settings.MaxRenderDistance then
-            HideAllESP(plr)
-            continue
-        end
-
-        -- Проверка на границах экрана
-        if rootPos.X < -50 or rootPos.X > viewportSize.X + 50 
-           or rootPos.Y < -50 or rootPos.Y > viewportSize.Y + 50 then
+        -- ПРОВЕРКА ВИДИМОСТИ: если персонаж за камерой (Z < 0) или слишком далеко - не рисуем
+        if rootPos.Z < 0 or rootPos.Z > ESP.Settings.MaxRenderDistance then
             HideAllESP(plr)
             continue
         end
@@ -526,7 +518,7 @@ RunService.RenderStepped:Connect(function()
         
         -- Защита от слишком маленьких размеров
         if height < 10 then
-            height = 30 -- Минимальная высота
+            height = 30
         end
         
         local width = height * 0.55
@@ -534,7 +526,6 @@ RunService.RenderStepped:Connect(function()
         -- Получаем здоровье
         local health, maxHealth = GetSafeHealthValues(humanoid)
         
-        -- Проверка здоровья
         if health <= 0 or maxHealth <= 0 then
             HideAllESP(plr)
             continue
@@ -542,7 +533,7 @@ RunService.RenderStepped:Connect(function()
         
         local healthPercent = math_max(0, math_min(1, health / maxHealth))
 
-        -- Обновляем box
+        -- Обновляем box (всегда рисуем если персонаж перед камерой)
         if ESP.Settings.EspBox and box then
             box.Size = Vector2new(width, height)
             box.Position = Vector2new(rootPos.X - width/2, rootPos.Y - height/2)
@@ -571,25 +562,17 @@ RunService.RenderStepped:Connect(function()
             local barX = rootPos.X - width/2 - barWidth - 2
             local barY = rootPos.Y - height/2
 
-            -- Проверяем, что позиции в пределах разумного
-            if barX > -1000 and barX < viewportSize.X + 1000 
-               and barY > -1000 and barY < viewportSize.Y + 1000 then
-                
-                healthBar.bg.Size = Vector2new(barWidth, barHeight)
-                healthBar.bg.Position = Vector2new(barX, barY)
-                healthBar.bg.Visible = true
+            healthBar.bg.Size = Vector2new(barWidth, barHeight)
+            healthBar.bg.Position = Vector2new(barX, barY)
+            healthBar.bg.Visible = true
 
-                local fillHeight = barHeight * healthPercent
-                fillHeight = math_max(0, math_min(barHeight, fillHeight))
+            local fillHeight = barHeight * healthPercent
+            fillHeight = math_max(0, math_min(barHeight, fillHeight))
 
-                healthBar.fill.Color = GetHealthColor(healthPercent)
-                healthBar.fill.Size = Vector2new(barWidth, fillHeight)
-                healthBar.fill.Position = Vector2new(barX, barY + (barHeight - fillHeight))
-                healthBar.fill.Visible = true
-            else
-                healthBar.bg.Visible = false
-                healthBar.fill.Visible = false
-            end
+            healthBar.fill.Color = GetHealthColor(healthPercent)
+            healthBar.fill.Size = Vector2new(barWidth, fillHeight)
+            healthBar.fill.Position = Vector2new(barX, barY + (barHeight - fillHeight))
+            healthBar.fill.Visible = true
         elseif healthBar then
             if healthBar.bg then healthBar.bg.Visible = false end
             if healthBar.fill then healthBar.fill.Visible = false end
@@ -597,16 +580,11 @@ RunService.RenderStepped:Connect(function()
 
         -- Обновляем текст здоровья
         if ESP.Settings.EspHealthText and healthText and humanoid then
-            local textX = rootPos.X - width/2 - 30
-            if textX > -500 and textX < viewportSize.X + 500 then
-                healthText.Color = GetHealthColor(healthPercent)
-                healthText.OutlineColor = ESP.Settings.OutlineColor
-                healthText.Text = string.format("%d/%d", math_floor(health), math_floor(maxHealth))
-                healthText.Position = Vector2new(textX, rootPos.Y)
-                healthText.Visible = true
-            else
-                healthText.Visible = false
-            end
+            healthText.Color = GetHealthColor(healthPercent)
+            healthText.OutlineColor = ESP.Settings.OutlineColor
+            healthText.Text = string.format("%d/%d", math_floor(health), math_floor(maxHealth))
+            healthText.Position = Vector2new(rootPos.X - width/2 - 30, rootPos.Y)
+            healthText.Visible = true
         elseif healthText then
             healthText.Visible = false
         end
