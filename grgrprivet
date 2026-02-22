@@ -8,24 +8,23 @@ local RunService = game:GetService("RunService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
--- Настройки ESP (изменяйте их в любое время - всё обновится автоматически)
+-- Настройки ESP
 ESP.Settings = {
-    Enabled = true,           -- Включить/выключить ESP
-    EspBox = true,            -- Показывать бокс
-    EspName = true,           -- Показывать имя
-    EspHealthBar = true,      -- Показывать полоску здоровья
-    EspHealthText = true,     -- Показывать текст здоровья
-    BoxColor = Color3.fromRGB(255, 0, 0),        -- Цвет бокса
-    NameColor = Color3.fromRGB(255, 255, 255),   -- Цвет имени
-    HealthBarWidth = 6,       -- Ширина полоски здоровья
-    OutlineColor = Color3.fromRGB(0, 0, 0),      -- Цвет обводки
-    Transparency = 1,         -- Прозрачность
-    ShowTeammates = false,    -- Показывать тиммейтов
-    ShowEnemies = true,       -- Показывать врагов
-    ShowSelf = false,         -- Показывать себя
-    BoxThickness = 1.6,       -- Толщина бокса
-    MaxRenderDistance = 1000,  -- Максимальная дистанция отрисовки
-    MinRenderSize = 20,       -- Минимальный размер для отрисовки
+    Enabled = true,
+    EspBox = true,
+    EspName = true,
+    EspHealthBar = true,
+    EspHealthText = true,
+    BoxColor = Color3.fromRGB(255, 0, 0),
+    NameColor = Color3.fromRGB(255, 255, 255),
+    HealthBarWidth = 6,
+    OutlineColor = Color3.fromRGB(0, 0, 0),
+    Transparency = 1,
+    ShowTeammates = false,
+    ShowEnemies = true,
+    ShowSelf = false,
+    BoxThickness = 1.6,
+    MaxRenderDistance = 1000,
 }
 
 -- Внутренние переменные
@@ -37,9 +36,10 @@ local Humanoids = {}
 local Connections = {}
 local PlayerData = {}
 
--- Кэш для оптимизации
-local ScreenCache = {}
-local CACHE_DURATION = 0.1
+-- Кэш последних координат для проверки
+local LastValidPosition = {}  -- Храним последнюю валидную позицию
+local LastValidSize = {}      -- Храним последний валидный размер
+local IsVisible = {}          -- Флаг видимости
 
 -- Функция для проверки, враг ли игрок
 local function IsEnemy(plr)
@@ -51,7 +51,6 @@ local function IsEnemy(plr)
     local theirChar = plr.Character
     if not myChar or not theirChar then return false end
 
-    -- Получаем имена команд (если есть)
     local myTeam = "Enemy"
     local theirTeam = "Enemy"
     
@@ -86,7 +85,9 @@ end
 local function ClearPlayerData(plr)
     Humanoids[plr] = nil
     PlayerData[plr] = nil
-    ScreenCache[plr] = nil
+    LastValidPosition[plr] = nil
+    LastValidSize[plr] = nil
+    IsVisible[plr] = nil
 end
 
 -- Обновление Humanoid
@@ -141,7 +142,6 @@ end
 local function CreateESP(plr)
     if Boxes[plr] then return end
 
-    -- Создаем бокс
     local box = Drawing.new("Square")
     box.Thickness = ESP.Settings.BoxThickness
     box.Filled = false
@@ -150,7 +150,6 @@ local function CreateESP(plr)
     box.Visible = false
     Boxes[plr] = box
 
-    -- Создаем имя
     local nameTag = Drawing.new("Text")
     nameTag.Text = plr.Name
     nameTag.Size = 16
@@ -161,7 +160,6 @@ local function CreateESP(plr)
     nameTag.Visible = false
     Names[plr] = nameTag
 
-    -- Создаем полоску здоровья (фон)
     local healthBarBg = Drawing.new("Square")
     healthBarBg.Thickness = 1
     healthBarBg.Filled = true
@@ -169,7 +167,6 @@ local function CreateESP(plr)
     healthBarBg.Transparency = 0.7
     healthBarBg.Visible = false
     
-    -- Создаем полоску здоровья (заполнение)
     local healthBarFill = Drawing.new("Square")
     healthBarFill.Thickness = 1
     healthBarFill.Filled = true
@@ -179,7 +176,6 @@ local function CreateESP(plr)
     
     HealthBars[plr] = {bg = healthBarBg, fill = healthBarFill}
 
-    -- Создаем текст здоровья
     local healthText = Drawing.new("Text")
     healthText.Size = 14
     healthText.Color = Color3.fromRGB(255, 255, 255)
@@ -254,34 +250,30 @@ local function GetSafeHealthValues(humanoid)
     return health, maxHealth
 end
 
--- Функция для конвертации 3D в 2D (для Vector2 камеры)
+-- Функция для конвертации 3D в 2D
 local function WorldToScreen(position)
-    -- Пытаемся использовать стандартную функцию
     local success, result = pcall(function()
         return Camera:WorldToViewportPoint(position)
     end)
     
     if success and result then
-        -- Если вернулся Vector3
         if typeof(result) == "Vector3" then
             return {
                 X = result.X,
                 Y = result.Y,
-                Visible = result.Z > 0.1,
-                Z = result.Z
+                Z = result.Z,
+                Visible = result.Z > 0.1
             }
-        -- Если вернулась таблица с координатами
         elseif type(result) == "table" then
             return {
                 X = result.X or result[1] or 0,
                 Y = result.Y or result[2] or 0,
-                Visible = (result.Z or result[3] or 1) > 0.1,
-                Z = result.Z or result[3] or 1
+                Z = result.Z or result[3] or 1,
+                Visible = (result.Z or result[3] or 1) > 0.1
             }
         end
     end
     
-    -- Альтернативный метод для 2D камер
     success, result = pcall(function()
         return Camera:WorldToScreenPoint(position)
     end)
@@ -290,36 +282,40 @@ local function WorldToScreen(position)
         return {
             X = result.X,
             Y = result.Y,
-            Visible = result.Z > 0.1,
-            Z = result.Z
+            Z = result.Z,
+            Visible = result.Z > 0.1
         }
     end
     
-    -- Если ничего не работает, возвращаем базовые координаты
     return {
         X = Camera.ViewportSize.X / 2,
         Y = Camera.ViewportSize.Y / 2,
-        Visible = false,
-        Z = -1
+        Z = -1,
+        Visible = false
     }
 end
 
--- Проверка, находится ли точка на экране
-local function IsOnScreen(position)
-    local screenPos = WorldToScreen(position)
-    
-    -- Проверяем видимость и границы экрана
-    if screenPos.Visible and screenPos.Z > 0 then
-        if screenPos.X >= 0 and screenPos.X <= Camera.ViewportSize.X and
-           screenPos.Y >= 0 and screenPos.Y <= Camera.ViewportSize.Y then
-            return true, screenPos
-        end
+-- ОСНОВНАЯ ФУНКЦИЯ ПРОВЕРКИ ВИДИМОСТИ ПО X и Y
+local function IsPositionValid(screenPos)
+    -- Проверяем видимость по Z (глубина)
+    if not screenPos.Visible or screenPos.Z <= 0.1 then
+        return false
     end
     
-    return false, screenPos
+    -- Проверяем координаты X и Y (ВОТ ЭТО ГЛАВНОЕ!)
+    -- Если X или Y выходят за пределы экрана - позиция невалидна
+    if screenPos.X < 0 or screenPos.X > Camera.ViewportSize.X then
+        return false
+    end
+    
+    if screenPos.Y < 0 or screenPos.Y > Camera.ViewportSize.Y then
+        return false
+    end
+    
+    return true
 end
 
--- Отслеживание смерти и изменений здоровья
+-- Отслеживание смерти
 local function TrackDeath(plr, humanoid)
     if not humanoid then return end
 
@@ -427,22 +423,8 @@ local SettingsMetatable = {
 
 setmetatable(ESP.Settings, SettingsMetatable)
 
--- Оптимизированный основной цикл
-local lastTime = 0
-local UPDATE_INTERVAL = 1/45 -- 45 FPS для плавности
-
+-- ОСНОВНОЙ ЦИКЛ С ПРОВЕРКОЙ X и Y
 RunService.RenderStepped:Connect(function()
-    local currentTime = tick()
-    
-    -- Ограничиваем частоту обновления
-    if currentTime - lastTime < UPDATE_INTERVAL then
-        return
-    end
-    lastTime = currentTime
-
-    -- Получаем размер экрана один раз для всех
-    local viewportSize = Camera.ViewportSize
-
     for plr, box in pairs(Boxes) do
         -- Быстрые проверки
         if plr == LocalPlayer and not ESP.Settings.ShowSelf then
@@ -465,8 +447,7 @@ RunService.RenderStepped:Connect(function()
         -- Получаем части персонажа
         local hrp = char:FindFirstChild("HumanoidRootPart") or 
                     char:FindFirstChild("Torso") or 
-                    char:FindFirstChild("UpperTorso") or
-                    char:FindFirstChild("LowerTorso")
+                    char:FindFirstChild("UpperTorso")
         
         local head = char:FindFirstChild("Head")
         
@@ -498,108 +479,150 @@ RunService.RenderStepped:Connect(function()
             continue
         end
 
-        -- Конвертируем 3D координаты в 2D
-        local rootOnScreen, rootPos = IsOnScreen(hrp.Position)
-        local headOnScreen, headPos = IsOnScreen(head.Position + Vector3.new(0, 0.5, 0))
+        -- Получаем позиции на экране
+        local rootScreen = WorldToScreen(hrp.Position)
+        local headScreen = WorldToScreen(head.Position + Vector3.new(0, 0.5, 0))
+        local legScreen = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
         
-        -- Если не видно ни одной точки, прячем ESP
-        if not rootOnScreen and not headOnScreen then
-            HideAllESP(plr)
-            continue
-        end
-
-        -- Используем доступные координаты
-        if not rootOnScreen and headOnScreen then
-            rootPos = headPos
-            rootPos.Y = headPos.Y + 50
-        elseif rootOnScreen and not headOnScreen then
-            headPos = rootPos
-            headPos.Y = rootPos.Y - 50
-        end
-
-        -- Проверка дистанции
-        local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
-        if distance > ESP.Settings.MaxRenderDistance then
-            HideAllESP(plr)
-            continue
-        end
-
-        -- Рассчитываем позицию ног (примерно)
-        local legPos = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
+        -- ПРОВЕРЯЕМ X и Y КООРДИНАТЫ ДЛЯ ВСЕХ ТОЧЕК
+        local rootValid = IsPositionValid(rootScreen)
+        local headValid = IsPositionValid(headScreen)
+        local legValid = IsPositionValid(legScreen)
         
-        -- Вычисляем высоту персонажа на экране
-        local height = math.abs(headPos.Y - legPos.Y)
-        local width = height * 0.55
-        
-        -- Проверка минимального размера
-        if height < ESP.Settings.MinRenderSize or width < 10 then
-            HideAllESP(plr)
-            continue
-        end
-
-        local healthPercent = health / maxHealth
-
-        -- Обновляем бокс
-        if ESP.Settings.EspBox and box then
-            box.Size = Vector2.new(width, height)
-            box.Position = Vector2.new(rootPos.X - width/2, rootPos.Y - height/2)
-            box.Color = ESP.Settings.BoxColor
-            box.Thickness = ESP.Settings.BoxThickness
-            box.Transparency = ESP.Settings.Transparency
-            box.Visible = true
-        elseif box then
-            box.Visible = false
-        end
-
-        -- Обновляем имя
-        if ESP.Settings.EspName and Names[plr] then
-            Names[plr].Position = Vector2.new(rootPos.X, rootPos.Y - height/2 - 20)
-            Names[plr].Color = ESP.Settings.NameColor
-            Names[plr].OutlineColor = ESP.Settings.OutlineColor
-            Names[plr].Visible = true
-        elseif Names[plr] then
-            Names[plr].Visible = false
-        end
-
-        -- Обновляем полоску здоровья
-        if ESP.Settings.EspHealthBar and HealthBars[plr] then
-            local barWidth = ESP.Settings.HealthBarWidth
-            local barHeight = height
-            local barX = rootPos.X - width/2 - barWidth - 2
-            local barY = rootPos.Y - height/2
-
-            local bg = HealthBars[plr].bg
-            local fill = HealthBars[plr].fill
-
-            if bg then
-                bg.Size = Vector2.new(barWidth, barHeight)
-                bg.Position = Vector2.new(barX, barY)
-                bg.Visible = true
+        -- Если хотя бы одна точка видна, используем её
+        if rootValid or headValid or legValid then
+            -- Используем доступные координаты
+            local finalRoot = rootValid and rootScreen or (headValid and headScreen or legScreen)
+            local finalHead = headValid and headScreen or (rootValid and rootScreen or legScreen)
+            local finalLeg = legValid and legScreen or (rootValid and rootScreen or headScreen)
+            
+            -- Корректируем Y координаты для правильной высоты
+            if not headValid and rootValid then
+                finalHead.Y = finalRoot.Y - 50
+            end
+            if not legValid and rootValid then
+                finalLeg.Y = finalRoot.Y + 50
+            end
+            
+            -- Вычисляем размеры
+            local height = math.abs(finalHead.Y - finalLeg.Y)
+            local width = height * 0.55
+            
+            -- Защита от слишком маленьких размеров
+            if height < 15 or width < 8 then
+                -- Если размер слишком мал, используем последние валидные значения
+                if LastValidPosition[plr] and LastValidSize[plr] then
+                    finalRoot = LastValidPosition[plr]
+                    width = LastValidSize[plr].X
+                    height = LastValidSize[plr].Y
+                else
+                    HideAllESP(plr)
+                    continue
+                end
+            else
+                -- Сохраняем валидные значения
+                LastValidPosition[plr] = finalRoot
+                LastValidSize[plr] = {X = width, Y = height}
             end
 
-            if fill then
-                local fillHeight = barHeight * healthPercent
-                fillHeight = math.max(0, math.min(barHeight, fillHeight))
+            -- Проверка дистанции
+            local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
+            if distance > ESP.Settings.MaxRenderDistance then
+                HideAllESP(plr)
+                continue
+            end
+
+            local healthPercent = health / maxHealth
+
+            -- Обновляем бокс с проверкой X и Y
+            if ESP.Settings.EspBox and box then
+                local newPos = Vector2.new(finalRoot.X - width/2, finalRoot.Y - height/2)
+                local newSize = Vector2.new(width, height)
                 
-                fill.Color = GetHealthColor(healthPercent)
-                fill.Size = Vector2.new(barWidth, fillHeight)
-                fill.Position = Vector2.new(barX, barY + (barHeight - fillHeight))
-                fill.Visible = true
+                -- Всегда обновляем, но теперь позиции более стабильные
+                box.Size = newSize
+                box.Position = newPos
+                box.Color = ESP.Settings.BoxColor
+                box.Thickness = ESP.Settings.BoxThickness
+                box.Transparency = ESP.Settings.Transparency
+                box.Visible = true
+                IsVisible[plr] = true
+            elseif box then
+                box.Visible = false
             end
-        elseif HealthBars[plr] then
-            if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-            if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-        end
 
-        -- Обновляем текст здоровья
-        if ESP.Settings.EspHealthText and HealthTexts[plr] then
-            HealthTexts[plr].Color = GetHealthColor(healthPercent)
-            HealthTexts[plr].OutlineColor = ESP.Settings.OutlineColor
-            HealthTexts[plr].Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
-            HealthTexts[plr].Position = Vector2.new(rootPos.X - width/2 - 35, rootPos.Y)
-            HealthTexts[plr].Visible = true
-        elseif HealthTexts[plr] then
-            HealthTexts[plr].Visible = false
+            -- Обновляем имя
+            if ESP.Settings.EspName and Names[plr] then
+                Names[plr].Position = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
+                Names[plr].Color = ESP.Settings.NameColor
+                Names[plr].OutlineColor = ESP.Settings.OutlineColor
+                Names[plr].Visible = true
+            elseif Names[plr] then
+                Names[plr].Visible = false
+            end
+
+            -- Обновляем полоску здоровья
+            if ESP.Settings.EspHealthBar and HealthBars[plr] then
+                local barWidth = ESP.Settings.HealthBarWidth
+                local barHeight = height
+                local barX = finalRoot.X - width/2 - barWidth - 2
+                local barY = finalRoot.Y - height/2
+
+                local bg = HealthBars[plr].bg
+                local fill = HealthBars[plr].fill
+
+                if bg then
+                    bg.Size = Vector2.new(barWidth, barHeight)
+                    bg.Position = Vector2.new(barX, barY)
+                    bg.Visible = true
+                end
+
+                if fill then
+                    local fillHeight = barHeight * healthPercent
+                    fillHeight = math.max(0, math.min(barHeight, fillHeight))
+                    
+                    fill.Color = GetHealthColor(healthPercent)
+                    fill.Size = Vector2.new(barWidth, fillHeight)
+                    fill.Position = Vector2.new(barX, barY + (barHeight - fillHeight))
+                    fill.Visible = true
+                end
+            elseif HealthBars[plr] then
+                if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
+                if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
+            end
+
+            -- Обновляем текст здоровья
+            if ESP.Settings.EspHealthText and HealthTexts[plr] then
+                HealthTexts[plr].Color = GetHealthColor(healthPercent)
+                HealthTexts[plr].OutlineColor = ESP.Settings.OutlineColor
+                HealthTexts[plr].Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
+                HealthTexts[plr].Position = Vector2.new(finalRoot.X - width/2 - 35, finalRoot.Y)
+                HealthTexts[plr].Visible = true
+            elseif HealthTexts[plr] then
+                HealthTexts[plr].Visible = false
+            end
+        else
+            -- Если ничего не видно, но у нас есть последние валидные позиции
+            if LastValidPosition[plr] and LastValidSize[plr] and IsVisible[plr] then
+                -- Продолжаем показывать на последней известной позиции
+                local finalRoot = LastValidPosition[plr]
+                local width = LastValidSize[plr].X
+                local height = LastValidSize[plr].Y
+                
+                if ESP.Settings.EspBox and box then
+                    box.Position = Vector2.new(finalRoot.X - width/2, finalRoot.Y - height/2)
+                    box.Size = Vector2.new(width, height)
+                    box.Visible = true
+                end
+                
+                if ESP.Settings.EspName and Names[plr] then
+                    Names[plr].Position = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
+                    Names[plr].Visible = true
+                end
+            else
+                HideAllESP(plr)
+                IsVisible[plr] = nil
+            end
         end
     end
 end)
@@ -615,6 +638,6 @@ for _, plr in Players:GetPlayers() do
     end
 end
 
-print("ESP loaded with Vector2 camera support!")
+print("ESP loaded with X/Y coordinate validation!")
 
 return ESP
