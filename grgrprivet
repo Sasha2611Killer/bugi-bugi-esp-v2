@@ -108,11 +108,36 @@ local function GetDistance(pos)
     return math.floor(dist / 3.28)
 end
 
+-- Проверка готов ли персонаж для ESP
+local function IsCharacterReady(char)
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+    local head = char:FindFirstChild("Head")
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    return hrp and head and humanoid and humanoid.Health > 0
+end
+
 -- Создание ESP для игрока
 local function CreateESP(plr)
-    if ESP.Objects[plr] then 
-        -- Если уже есть - просто обновляем настройки
-        return 
+    if ESP.Objects[plr] then return end
+    
+    -- Проверяем есть ли персонаж и готов ли он
+    local char = plr.Character
+    if not IsCharacterReady(char) then
+        -- Если не готов, пробуем позже
+        task.spawn(function()
+            local timeout = 0
+            while timeout < 30 do -- ждем максимум 30 секунд
+                task.wait(0.5)
+                timeout = timeout + 0.5
+                char = plr.Character
+                if IsCharacterReady(char) then
+                    CreateESP(plr)  -- рекурсивный вызов когда готов
+                    break
+                end
+            end
+        end)
+        return
     end
     
     local objects = {}
@@ -171,6 +196,8 @@ local function CreateESP(plr)
     
     ESP.Objects[plr] = objects
     LastSizes[plr] = nil
+    
+    print("ESP created for", plr.Name)  -- отладка
 end
 
 -- Удаление ESP для игрока
@@ -364,25 +391,18 @@ end
 
 -- Функция для создания ESP для всех существующих игроков
 local function SetupAllPlayers()
+    print("Setting up ESP for all players...")
     for _, plr in pairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer then
             -- Создаем ESP для игрока
             CreateESP(plr)
             
-            -- Сохраняем соединения
+            -- Сохраняем соединения если их еще нет
             if not ESP.Connections[plr] then
                 ESP.Connections[plr] = {
                     plr.CharacterAdded:Connect(function() OnCharacterAdded(plr) end),
                     plr.CharacterRemoving:Connect(function() RemoveESP(plr) end),
                 }
-            end
-            
-            -- Если у игрока уже есть персонаж, убеждаемся что ESP создан
-            if plr.Character then
-                -- Проверяем есть ли уже объекты
-                if not ESP.Objects[plr] then
-                    CreateESP(plr)
-                end
             end
         end
     end
@@ -411,11 +431,13 @@ Players.PlayerRemoving:Connect(function(plr)
 end)
 
 -- Запускаем создание ESP для всех существующих игроков
-SetupAllPlayers()
-
--- Также запускаем с небольшой задержкой для надежности
 task.spawn(function()
+    -- Ждем немного для загрузки
     task.wait(1)
+    SetupAllPlayers()
+    
+    -- Пробуем еще раз через 3 секунды для тех кто долго грузится
+    task.wait(3)
     SetupAllPlayers()
 end)
 
