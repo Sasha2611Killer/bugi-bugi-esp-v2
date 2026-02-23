@@ -2,75 +2,50 @@
     WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
 ]]
 
-local ESP = {}
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
--- Настройки ESP
-ESP.Settings = {
-    Enabled = true,
-    EspBox = true,
-    EspName = true,
-    EspHealthBar = true,
-    EspHealthText = true,
+-- Настройки
+local Settings = {
+    Enabled = false,
+    -- Box
+    BoxEnabled = false,
     BoxColor = Color3.fromRGB(255, 0, 0),
-    NameColor = Color3.fromRGB(255, 255, 255),
-    HealthBarWidth = 6,
-    OutlineColor = Color3.fromRGB(0, 0, 0),
-    Transparency = 1,
-    ShowTeammates = false,
-    ShowEnemies = true,
-    ShowSelf = false,
     BoxThickness = 1.6,
-    MaxRenderDistance = 1000,
-    Debug = true,
+    -- Name
+    NameEnabled = false,
+    NameColor = Color3.fromRGB(255, 255, 255),
+    NameSize = 16,
+    -- Health
+    HealthEnabled = false,
+    HealthBarWidth = 6,
+    HealthTextEnabled = false,
+    -- Distance
+    DistanceEnabled = false,
+    DistanceColor = Color3.fromRGB(255, 255, 255),
+    DistanceSize = 14,
+    -- Общие
+    MaxDistance = 1000,
+    ShowEnemies = true,
+    ShowTeammates = false,
+    OutlineColor = Color3.fromRGB(0, 0, 0),
 }
 
--- Внутренние переменные
-ESP.Objects = {}
-ESP.Overrides = {}
+-- Хранилище
+local ESPObjects = {}
+local Connections = {}
+local Cache = {
+    ViewportSize = Vector2.new(0, 0),
+    CameraPos = Vector3.new(0, 0, 0),
+}
 
--- Для отладки
-local function DebugLog(...)
-    if ESP.Settings.Debug then
-        print("[ESP]", ...)
-    end
-end
+-- Только для плавности размера
+local LastSizes = {}
 
--- Вспомогательные функции
-local function WorldToScreen(position)
-    local success, result = pcall(function()
-        return Camera:WorldToViewportPoint(position)
-    end)
-    
-    if success and result then
-        return {
-            X = result.X,
-            Y = result.Y,
-            Z = result.Z,
-            OnScreen = result.Z > 0.1
-        }
-    end
-    return {X = -1, Y = -1, Z = -1, OnScreen = false}
-end
-
-local function IsOnScreen(screenPos)
-    if not screenPos.OnScreen or screenPos.Z <= 0.1 then
-        return false
-    end
-    if screenPos.X < 0 or screenPos.X > Camera.ViewportSize.X then
-        return false
-    end
-    if screenPos.Y < 0 or screenPos.Y > Camera.ViewportSize.Y then
-        return false
-    end
-    return true
-end
-
+-- Цвет здоровья
 local function GetHealthColor(percent)
-    percent = math.max(0, math.min(1, percent))
     if percent > 0.6 then
         return Color3.fromRGB(0, 255, 0)
     elseif percent > 0.3 then
@@ -82,443 +57,311 @@ local function GetHealthColor(percent)
     end
 end
 
--- Функции для получения данных
-function ESP:GetCharacter(plr)
-    if self.Overrides.GetCharacter then
-        return self.Overrides.GetCharacter(plr)
-    end
-    return plr.Character
+-- Интерполяция только для размера
+local function Lerp(a, b, t)
+    return a + (b - a) * t
 end
 
-function ESP:GetHumanoid(character)
-    if not character then return nil end
-    if self.Overrides.GetHumanoid then
-        return self.Overrides.GetHumanoid(character)
-    end
-    return character:FindFirstChildOfClass("Humanoid")
+local function LerpVector2(a, b, t)
+    if not a then return b end
+    if not b then return a end
+    return Vector2.new(
+        Lerp(a.X, b.X, t),
+        Lerp(a.Y, b.Y, t)
+    )
 end
 
-function ESP:GetTeam(plr)
-    if self.Overrides.GetTeam then
-        return self.Overrides.GetTeam(plr)
-    end
-    local char = self:GetCharacter(plr)
-    if char and char.Parent then
-        return char.Parent.Name
-    end
-    return "Enemy"
-end
-
-function ESP:IsEnemy(plr)
-    if plr == LocalPlayer then 
-        return ESP.Settings.ShowSelf
-    end
+-- Проверка врага
+local function IsEnemy(plr)
+    if plr == LocalPlayer then return false end
+    local myChar = LocalPlayer.Character
+    local theirChar = plr.Character
+    if not myChar or not theirChar then return false end
     
-    if self.Overrides.IsEnemy then
-        return self.Overrides.IsEnemy(plr)
-    end
-    
-    local myTeam = self:GetTeam(LocalPlayer)
-    local theirTeam = self:GetTeam(plr)
+    local myTeam = myChar.Parent and myChar.Parent.Name or "Enemy"
+    local theirTeam = theirChar.Parent and theirChar.Parent.Name or "Enemy"
     local isEnemy = myTeam ~= theirTeam
     
-    if isEnemy then
-        return ESP.Settings.ShowEnemies
-    else
-        return ESP.Settings.ShowTeammates
-    end
+    return isEnemy and Settings.ShowEnemies or (not isEnemy and Settings.ShowTeammates)
 end
 
--- Метатаблица для игроков
-local PlayerMetatable = {}
-PlayerMetatable.__index = PlayerMetatable
-
-function PlayerMetatable:Destroy()
-    DebugLog("Destroying ESP for", self.Player.Name)
-    for name, component in pairs(self.Components) do
-        if component then
-            pcall(function() 
-                component:Remove()
-                component = nil
-            end)
-        end
-    end
-    self.Components = {}
-    ESP.Objects[self.Player] = nil
+-- Получение дистанции в метрах
+local function GetDistance(pos)
+    local dist = (Cache.CameraPos - pos).Magnitude
+    return math.floor(dist / 3.28) -- Конвертация в метры (приблизительно)
 end
 
-function PlayerMetatable:CreateComponents()
-    DebugLog("Creating components for", self.Player.Name)
-    local c = {}
+-- Создание ESP для игрока
+local function CreateESP(plr)
+    if ESPObjects[plr] then return end
+    
+    local objects = {}
     
     -- Box
-    c.Box = Drawing.new("Square")
-    c.Box.Thickness = ESP.Settings.BoxThickness
-    c.Box.Filled = false
-    c.Box.Color = ESP.Settings.BoxColor
-    c.Box.Transparency = ESP.Settings.Transparency
-    c.Box.Visible = false
-    DebugLog("Box created for", self.Player.Name)
+    objects.Box = Drawing.new("Square")
+    objects.Box.Thickness = Settings.BoxThickness
+    objects.Box.Filled = false
+    objects.Box.Color = Settings.BoxColor
+    objects.Box.Transparency = 1
+    objects.Box.Visible = false
     
     -- Name
-    c.Name = Drawing.new("Text")
-    c.Name.Text = self.Player.Name
-    c.Name.Size = 16
-    c.Name.Color = ESP.Settings.NameColor
-    c.Name.Center = true
-    c.Name.Outline = true
-    c.Name.OutlineColor = ESP.Settings.OutlineColor
-    c.Name.Visible = false
-    DebugLog("Name created for", self.Player.Name)
+    objects.Name = Drawing.new("Text")
+    objects.Name.Text = plr.Name
+    objects.Name.Size = Settings.NameSize
+    objects.Name.Color = Settings.NameColor
+    objects.Name.Center = true
+    objects.Name.Outline = true
+    objects.Name.OutlineColor = Settings.OutlineColor
+    objects.Name.Visible = false
     
-    -- Health Bar Background
-    c.HealthBarBg = Drawing.new("Square")
-    c.HealthBarBg.Thickness = 1
-    c.HealthBarBg.Filled = true
-    c.HealthBarBg.Color = Color3.fromRGB(0, 0, 0)
-    c.HealthBarBg.Transparency = 0.7
-    c.HealthBarBg.Visible = false
+    -- Distance
+    objects.Distance = Drawing.new("Text")
+    objects.Distance.Size = Settings.DistanceSize
+    objects.Distance.Color = Settings.DistanceColor
+    objects.Distance.Center = true
+    objects.Distance.Outline = true
+    objects.Distance.OutlineColor = Settings.OutlineColor
+    objects.Distance.Visible = false
     
-    -- Health Bar Fill
-    c.HealthBarFill = Drawing.new("Square")
-    c.HealthBarFill.Thickness = 1
-    c.HealthBarFill.Filled = true
-    c.HealthBarFill.Color = Color3.fromRGB(0, 255, 0)
-    c.HealthBarFill.Transparency = 0.7
-    c.HealthBarFill.Visible = false
-    DebugLog("HealthBar created for", self.Player.Name)
+    -- Health Bar (фон)
+    objects.HealthBarBg = Drawing.new("Square")
+    objects.HealthBarBg.Thickness = 1
+    objects.HealthBarBg.Filled = true
+    objects.HealthBarBg.Color = Color3.fromRGB(0, 0, 0)
+    objects.HealthBarBg.Transparency = 0.7
+    objects.HealthBarBg.Visible = false
+    
+    -- Health Bar (заполнение)
+    objects.HealthBarFill = Drawing.new("Square")
+    objects.HealthBarFill.Thickness = 1
+    objects.HealthBarFill.Filled = true
+    objects.HealthBarFill.Color = Color3.fromRGB(0, 255, 0)
+    objects.HealthBarFill.Transparency = 0.7
+    objects.HealthBarFill.Visible = false
     
     -- Health Text
-    c.HealthText = Drawing.new("Text")
-    c.HealthText.Size = 14
-    c.HealthText.Color = Color3.fromRGB(255, 255, 255)
-    c.HealthText.Center = true
-    c.HealthText.Outline = true
-    c.HealthText.OutlineColor = ESP.Settings.OutlineColor
-    c.HealthText.Visible = false
-    DebugLog("HealthText created for", self.Player.Name)
+    objects.HealthText = Drawing.new("Text")
+    objects.HealthText.Size = 14
+    objects.HealthText.Color = Color3.fromRGB(255, 255, 255)
+    objects.HealthText.Center = true
+    objects.HealthText.Outline = true
+    objects.HealthText.OutlineColor = Settings.OutlineColor
+    objects.HealthText.Visible = false
     
-    self.Components = c
-    DebugLog("All components created for", self.Player.Name)
+    ESPObjects[plr] = objects
+    LastSizes[plr] = nil
 end
 
-function PlayerMetatable:Update()
-    local c = self.Components
-    if not c then 
-        DebugLog("No components for", self.Player.Name)
-        return 
-    end
-    
-    -- Проверка настроек
-    if not ESP.Settings.Enabled then
-        if c.Box.Visible then
-            c.Box.Visible = false
-            c.Name.Visible = false
-            c.HealthBarBg.Visible = false
-            c.HealthBarFill.Visible = false
-            c.HealthText.Visible = false
+-- Удаление ESP для игрока
+local function RemoveESP(plr)
+    if ESPObjects[plr] then
+        for _, obj in pairs(ESPObjects[plr]) do
+            obj:Remove()
         end
-        return
+        ESPObjects[plr] = nil
     end
+    LastSizes[plr] = nil
+end
+
+-- Конвертация 3D в 2D
+local function WorldToScreen(pos)
+    local vector = Camera:WorldToViewportPoint(pos)
+    return vector.X, vector.Y, vector.Z
+end
+
+-- Проверка на экране
+local function IsOnScreen(x, y, z)
+    return z > 0.1 and 
+           x >= 0 and x <= Cache.ViewportSize.X and
+           y >= 0 and y <= Cache.ViewportSize.Y
+end
+
+-- RenderStepped для максимальной точности
+RunService.RenderStepped:Connect(function()
+    if not Settings.Enabled then return end
     
-    -- Получаем персонажа
-    local char = ESP:GetCharacter(self.Player)
-    if not char or not char.Parent then
-        if c.Box.Visible then
-            c.Box.Visible = false
-            c.Name.Visible = false
-            c.HealthBarBg.Visible = false
-            c.HealthBarFill.Visible = false
-            c.HealthText.Visible = false
-        end
-        return
-    end
+    Cache.ViewportSize = Camera.ViewportSize
+    Cache.CameraPos = Camera.CFrame.Position
     
-    -- Получаем части тела
-    local hrp = char:FindFirstChild("HumanoidRootPart") or 
-                char:FindFirstChild("Torso") or 
-                char:FindFirstChild("UpperTorso")
-    local head = char:FindFirstChild("Head")
-    
-    if not hrp or not head then
-        if c.Box.Visible then
-            c.Box.Visible = false
-            c.Name.Visible = false
-            c.HealthBarBg.Visible = false
-            c.HealthBarFill.Visible = false
-            c.HealthText.Visible = false
-        end
-        return
-    end
-    
-    -- Проверка на врага
-    if not ESP:IsEnemy(self.Player) then
-        if c.Box.Visible then
-            c.Box.Visible = false
-            c.Name.Visible = false
-            c.HealthBarBg.Visible = false
-            c.HealthBarFill.Visible = false
-            c.HealthText.Visible = false
-        end
-        return
-    end
-    
-    -- Получаем Humanoid
-    local humanoid = ESP:GetHumanoid(char)
-    if not humanoid or humanoid.Health <= 0 then
-        if c.Box.Visible then
-            c.Box.Visible = false
-            c.Name.Visible = false
-            c.HealthBarBg.Visible = false
-            c.HealthBarFill.Visible = false
-            c.HealthText.Visible = false
-        end
-        return
-    end
-    
-    -- Получаем позиции на экране
-    local rootPos = WorldToScreen(hrp.Position)
-    local headPos = WorldToScreen(head.Position + Vector3.new(0, 0.5, 0))
-    local legPos = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
-    
-    -- Проверяем видимость
-    local rootVisible = IsOnScreen(rootPos)
-    local headVisible = IsOnScreen(headPos)
-    local legVisible = IsOnScreen(legPos)
-    
-    if not rootVisible and not headVisible and not legVisible then
-        if c.Box.Visible then
-            c.Box.Visible = false
-            c.Name.Visible = false
-            c.HealthBarBg.Visible = false
-            c.HealthBarFill.Visible = false
-            c.HealthText.Visible = false
-        end
-        return
-    end
-    
-    -- Проверка дистанции
-    local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
-    if distance > ESP.Settings.MaxRenderDistance then
-        if c.Box.Visible then
-            c.Box.Visible = false
-            c.Name.Visible = false
-            c.HealthBarBg.Visible = false
-            c.HealthBarFill.Visible = false
-            c.HealthText.Visible = false
-        end
-        return
-    end
-    
-    -- Используем доступные координаты
-    local finalRoot = rootVisible and rootPos or (headVisible and headPos or legPos)
-    local finalHead = headVisible and headPos or (rootVisible and rootPos or legPos)
-    local finalLeg = legVisible and legPos or (rootVisible and rootPos or headPos)
-    
-    -- Корректируем Y координаты
-    if not headVisible and rootVisible then
-        finalHead.Y = finalRoot.Y - 50
-    end
-    if not legVisible and rootVisible then
-        finalLeg.Y = finalRoot.Y + 50
-    end
-    
-    -- Вычисляем размеры
-    local height = math.abs(finalHead.Y - finalLeg.Y)
-    local width = height * 0.55
-    
-    if height < 10 or width < 5 then
-        if c.Box.Visible then
-            c.Box.Visible = false
-            c.Name.Visible = false
-            c.HealthBarBg.Visible = false
-            c.HealthBarFill.Visible = false
-            c.HealthText.Visible = false
-        end
-        return
-    end
-    
-    local health = humanoid.Health
-    local maxHealth = humanoid.MaxHealth
-    local healthPercent = health / maxHealth
-    local healthColor = GetHealthColor(healthPercent)
-    
-    -- Обновляем Box
-    if ESP.Settings.EspBox then
-        c.Box.Size = Vector2.new(width, height)
-        c.Box.Position = Vector2.new(finalRoot.X - width/2, finalRoot.Y - height/2)
-        c.Box.Color = ESP.Settings.BoxColor
-        c.Box.Thickness = ESP.Settings.BoxThickness
-        c.Box.Transparency = ESP.Settings.Transparency
-        if not c.Box.Visible then 
-            c.Box.Visible = true
-            DebugLog("Box now visible for", self.Player.Name)
-        end
-    elseif c.Box.Visible then
-        c.Box.Visible = false
-    end
-    
-    -- Обновляем Name
-    if ESP.Settings.EspName then
-        c.Name.Position = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
-        c.Name.Color = ESP.Settings.NameColor
-        c.Name.OutlineColor = ESP.Settings.OutlineColor
-        if not c.Name.Visible then 
-            c.Name.Visible = true
-            DebugLog("Name now visible for", self.Player.Name)
-        end
-    elseif c.Name.Visible then
-        c.Name.Visible = false
-    end
-    
-    -- Обновляем HealthBar
-    if ESP.Settings.EspHealthBar then
-        local barWidth = ESP.Settings.HealthBarWidth
-        local barX = finalRoot.X - width/2 - barWidth - 2
-        local barY = finalRoot.Y - height/2
-        
-        -- Background
-        c.HealthBarBg.Size = Vector2.new(barWidth, height)
-        c.HealthBarBg.Position = Vector2.new(barX, barY)
-        if not c.HealthBarBg.Visible then 
-            c.HealthBarBg.Visible = true
+    for plr, objs in pairs(ESPObjects) do
+        local char = plr.Character
+        if not char then 
+            for _, obj in pairs(objs) do obj.Visible = false end
+            continue 
         end
         
-        -- Fill
-        local fillHeight = height * healthPercent
-        c.HealthBarFill.Size = Vector2.new(barWidth, fillHeight)
-        c.HealthBarFill.Position = Vector2.new(barX, barY + (height - fillHeight))
-        c.HealthBarFill.Color = healthColor
-        if not c.HealthBarFill.Visible then 
-            c.HealthBarFill.Visible = true
-            DebugLog("HealthBar now visible for", self.Player.Name)
+        -- Получаем части
+        local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+        local head = char:FindFirstChild("Head")
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        
+        if not hrp or not head or not humanoid or humanoid.Health <= 0 then
+            for _, obj in pairs(objs) do obj.Visible = false end
+            continue
         end
-    else
-        if c.HealthBarBg.Visible then c.HealthBarBg.Visible = false end
-        if c.HealthBarFill.Visible then c.HealthBarFill.Visible = false end
-    end
-    
-    -- Обновляем HealthText
-    if ESP.Settings.EspHealthText then
-        c.HealthText.Color = healthColor
-        c.HealthText.OutlineColor = ESP.Settings.OutlineColor
-        c.HealthText.Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
-        c.HealthText.Position = Vector2.new(finalRoot.X - width/2 - 35, finalRoot.Y)
-        if not c.HealthText.Visible then 
-            c.HealthText.Visible = true
-            DebugLog("HealthText now visible for", self.Player.Name)
+        
+        -- Проверка дистанции
+        local distance = (Cache.CameraPos - hrp.Position).Magnitude
+        if distance > Settings.MaxDistance then
+            for _, obj in pairs(objs) do obj.Visible = false end
+            continue
         end
-    elseif c.HealthText.Visible then
-        c.HealthText.Visible = false
+        
+        -- Проверка врага
+        if not IsEnemy(plr) then
+            for _, obj in pairs(objs) do obj.Visible = false end
+            continue
+        end
+        
+        -- Получаем позиции
+        local headX, headY, headZ = WorldToScreen(head.Position + Vector3.new(0, 0.6, 0))
+        local rootX, rootY, rootZ = WorldToScreen(hrp.Position)
+        local legX, legY, legZ = WorldToScreen(hrp.Position - Vector3.new(0, 3.5, 0))
+        
+        -- Проверка видимости
+        if not IsOnScreen(rootX, rootY, rootZ) and not IsOnScreen(headX, headY, headZ) then
+            for _, obj in pairs(objs) do obj.Visible = false end
+            continue
+        end
+        
+        -- Используем доступные координаты
+        local finalRootX, finalRootY = rootX, rootY
+        local finalHeadY = IsOnScreen(headX, headY, headZ) and headY or (rootY - 50)
+        local finalLegY = IsOnScreen(legX, legY, legZ) and legY or (rootY + 50)
+        
+        -- Вычисляем размеры
+        local height = math.abs(finalHeadY - finalLegY)
+        local width = height * 0.55
+        
+        if height < 10 or width < 5 then
+            for _, obj in pairs(objs) do obj.Visible = false end
+            continue
+        end
+        
+        local health = humanoid.Health
+        local maxHealth = humanoid.MaxHealth
+        local healthPercent = health / maxHealth
+        local healthColor = GetHealthColor(healthPercent)
+        
+        -- Обновляем Box
+        if Settings.BoxEnabled then
+            objs.Box.Position = Vector2.new(finalRootX - width/2, finalRootY - height/2)
+            
+            if LastSizes[plr] then
+                local newSize = Vector2.new(width, height)
+                local smoothSize = LerpVector2(LastSizes[plr], newSize, 0.5)
+                objs.Box.Size = smoothSize
+                LastSizes[plr] = smoothSize
+            else
+                objs.Box.Size = Vector2.new(width, height)
+                LastSizes[plr] = Vector2.new(width, height)
+            end
+            
+            objs.Box.Color = Settings.BoxColor
+            objs.Box.Thickness = Settings.BoxThickness
+            objs.Box.Visible = true
+        else
+            objs.Box.Visible = false
+        end
+        
+        -- Обновляем Name (сверху)
+        if Settings.NameEnabled then
+            objs.Name.Position = Vector2.new(finalRootX, finalRootY - height/2 - 20)
+            objs.Name.Color = Settings.NameColor
+            objs.Name.OutlineColor = Settings.OutlineColor
+            objs.Name.Visible = true
+        else
+            objs.Name.Visible = false
+        end
+        
+        -- Обновляем Distance (снизу)
+        if Settings.DistanceEnabled then
+            local distMeters = GetDistance(hrp.Position)
+            objs.Distance.Text = distMeters .. "m"
+            objs.Distance.Position = Vector2.new(finalRootX, finalRootY + height/2 + 20)
+            objs.Distance.Color = Settings.DistanceColor
+            objs.Distance.OutlineColor = Settings.OutlineColor
+            objs.Distance.Visible = true
+        else
+            objs.Distance.Visible = false
+        end
+        
+        -- Обновляем Health Bar
+        if Settings.HealthEnabled then
+            local barWidth = Settings.HealthBarWidth
+            local barX = finalRootX - width/2 - barWidth - 2
+            local barY = finalRootY - height/2
+            
+            -- Background
+            objs.HealthBarBg.Size = Vector2.new(barWidth, height)
+            objs.HealthBarBg.Position = Vector2.new(barX, barY)
+            objs.HealthBarBg.Visible = true
+            
+            -- Fill
+            local fillHeight = height * healthPercent
+            objs.HealthBarFill.Size = Vector2.new(barWidth, fillHeight)
+            objs.HealthBarFill.Position = Vector2.new(barX, barY + (height - fillHeight))
+            objs.HealthBarFill.Color = healthColor
+            objs.HealthBarFill.Visible = true
+        else
+            objs.HealthBarBg.Visible = false
+            objs.HealthBarFill.Visible = false
+        end
+        
+        -- Обновляем Health Text
+        if Settings.HealthTextEnabled then
+            objs.HealthText.Color = healthColor
+            objs.HealthText.OutlineColor = Settings.OutlineColor
+            objs.HealthText.Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
+            objs.HealthText.Position = Vector2.new(finalRootX - width/2 - 35, finalRootY)
+            objs.HealthText.Visible = true
+        else
+            objs.HealthText.Visible = false
+        end
     end
+end)
+
+-- Отслеживаем смерть/респавн
+local function OnCharacterAdded(plr)
+    RemoveESP(plr)
+    CreateESP(plr)
 end
 
--- Функция создания ESP для игрока
-function ESP:AddPlayer(plr)
-    if plr == LocalPlayer then 
-        DebugLog("Skipping local player")
-        return 
-    end
-    
-    DebugLog("Adding player:", plr.Name)
-    
-    if self.Objects[plr] then 
-        DebugLog("Player already exists, destroying old:", plr.Name)
-        self.Objects[plr]:Destroy()
-    end
-    
-    local obj = setmetatable({
-        Player = plr,
-        Components = {}
-    }, PlayerMetatable)
-    
-    obj:CreateComponents()
-    self.Objects[plr] = obj
-    DebugLog("Player added:", plr.Name)
-    
-    -- Отслеживаем смерть и респавн
-    local function onCharacterAdded(char)
-        DebugLog("Character added for", plr.Name)
-        obj:Destroy()
-        obj:CreateComponents()
-    end
-    
-    local function onCharacterRemoving()
-        DebugLog("Character removing for", plr.Name)
-        obj:Destroy()
-    end
-    
-    -- Очищаем старые соединения
-    if obj.Connections then
-        for _, conn in pairs(obj.Connections) do
-            conn:Disconnect()
-        end
-    end
-    
-    obj.Connections = {
-        plr.CharacterAdded:Connect(onCharacterAdded),
-        plr.CharacterRemoving:Connect(onCharacterRemoving)
-    }
-    
-    if plr.Character then
-        DebugLog("Player already has character:", plr.Name)
-        onCharacterAdded(plr.Character)
-    end
-end
-
--- Обработка добавления игрока
 Players.PlayerAdded:Connect(function(plr)
-    ESP:AddPlayer(plr)
+    CreateESP(plr)
+    
+    Connections[plr] = {
+        plr.CharacterAdded:Connect(function() OnCharacterAdded(plr) end),
+        plr.CharacterRemoving:Connect(function() RemoveESP(plr) end),
+    }
 end)
 
 Players.PlayerRemoving:Connect(function(plr)
-    DebugLog("Player removing:", plr.Name)
-    if ESP.Objects[plr] then
-        ESP.Objects[plr]:Destroy()
+    RemoveESP(plr)
+    if Connections[plr] then
+        for _, conn in pairs(Connections[plr]) do
+            conn:Disconnect()
+        end
+        Connections[plr] = nil
     end
 end)
 
--- Добавляем существующих игроков
-DebugLog("Adding existing players...")
+-- Существующие игроки
 for _, plr in Players:GetPlayers() do
     if plr ~= LocalPlayer then
-        ESP:AddPlayer(plr)
+        CreateESP(plr)
+        
+        Connections[plr] = {
+            plr.CharacterAdded:Connect(function() OnCharacterAdded(plr) end),
+            plr.CharacterRemoving:Connect(function() RemoveESP(plr) end),
+        }
     end
 end
 
--- Оптимизированный цикл обновления
-local lastUpdate = 0
-local UPDATE_RATE = 1/30 -- 30 FPS
-local frameCount = 0
-
-RunService.Heartbeat:Connect(function()
-    local currentTime = tick()
-    if currentTime - lastUpdate < UPDATE_RATE then
-        return
-    end
-    lastUpdate = currentTime
-    frameCount = frameCount + 1
-    
-    -- Обновляем всех игроков
-    local count = 0
-    for _, obj in pairs(ESP.Objects) do
-        obj:Update()
-        count = count + 1
-    end
-    
-    if frameCount % 30 == 0 then -- Логируем каждые 30 кадров
-        DebugLog("Updating", count, "players")
-    end
-end)
-
-print("=" .. string.rep("=", 50))
-print("ESP loaded with optimized architecture")
-print("Settings Enabled:", ESP.Settings.Enabled)
-print("Show Enemies:", ESP.Settings.ShowEnemies)
-print("Show Teammates:", ESP.Settings.ShowTeammates)
-print("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
-print("Players in game:", #Players:GetPlayers())
-print("ESP Objects:", table.count(ESP.Objects))
-print("=" .. string.rep("=", 50))
-
-return ESP
+print("ESP loaded - Added Distance display at bottom")
+print("Settings: Box=" .. tostring(Settings.BoxEnabled) .. 
+      " Name=" .. tostring(Settings.NameEnabled) .. 
+      " Health=" .. tostring(Settings.HealthEnabled) ..
+      " HealthText=" .. tostring(Settings.HealthTextEnabled) ..
+      " Distance=" .. tostring(Settings.DistanceEnabled))
