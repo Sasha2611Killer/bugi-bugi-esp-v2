@@ -110,7 +110,10 @@ end
 
 -- Создание ESP для игрока
 local function CreateESP(plr)
-    if ESP.Objects[plr] then return end
+    if ESP.Objects[plr] then 
+        -- Если уже есть - просто обновляем настройки
+        return 
+    end
     
     local objects = {}
     
@@ -359,8 +362,36 @@ local function OnCharacterAdded(plr)
     CreateESP(plr)
 end
 
--- Подключаем события
+-- Функция для создания ESP для всех существующих игроков
+local function SetupAllPlayers()
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            -- Создаем ESP для игрока
+            CreateESP(plr)
+            
+            -- Сохраняем соединения
+            if not ESP.Connections[plr] then
+                ESP.Connections[plr] = {
+                    plr.CharacterAdded:Connect(function() OnCharacterAdded(plr) end),
+                    plr.CharacterRemoving:Connect(function() RemoveESP(plr) end),
+                }
+            end
+            
+            -- Если у игрока уже есть персонаж, убеждаемся что ESP создан
+            if plr.Character then
+                -- Проверяем есть ли уже объекты
+                if not ESP.Objects[plr] then
+                    CreateESP(plr)
+                end
+            end
+        end
+    end
+end
+
+-- Подключаем события для новых игроков
 Players.PlayerAdded:Connect(function(plr)
+    if plr == LocalPlayer then return end
+    
     CreateESP(plr)
     
     ESP.Connections[plr] = {
@@ -379,20 +410,18 @@ Players.PlayerRemoving:Connect(function(plr)
     end
 end)
 
--- Существующие игроки
-for _, plr in Players:GetPlayers() do
-    if plr ~= LocalPlayer then
-        CreateESP(plr)
-        
-        ESP.Connections[plr] = {
-            plr.CharacterAdded:Connect(function() OnCharacterAdded(plr) end),
-            plr.CharacterRemoving:Connect(function() RemoveESP(plr) end),
-        }
-    end
-end
+-- Запускаем создание ESP для всех существующих игроков
+SetupAllPlayers()
+
+-- Также запускаем с небольшой задержкой для надежности
+task.spawn(function()
+    task.wait(1)
+    SetupAllPlayers()
+end)
 
 print("ESP loaded - можно менять настройки через ESP.Enabled, ESP.BoxEnabled и т.д.")
 print("При ESP.Enabled = false все объекты полностью удаляются из памяти")
+print("Текущие игроки:", #Players:GetPlayers() - 1)
 
 -- ВОЗВРАЩАЕМ ТАБЛИЦУ (как в Kiriot)
 return ESP
