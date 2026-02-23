@@ -7,8 +7,9 @@ local RunService = game:GetService("RunService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
--- Настройки
-local Settings = {
+-- Основная таблица ESP (как в Kiriot)
+local ESP = {
+    -- Настройки (можно менять извне)
     Enabled = false,
     -- Box
     BoxEnabled = false,
@@ -31,18 +32,18 @@ local Settings = {
     ShowEnemies = true,
     ShowTeammates = false,
     OutlineColor = Color3.fromRGB(0, 0, 0),
+    
+    -- Внутренние таблицы
+    Objects = {},  -- объекты ESP
+    Connections = {},  -- соединения
 }
 
--- Хранилище
-local ESPObjects = {}
-local Connections = {}
+-- Хранилище для плавности
+local LastSizes = {}
 local Cache = {
     ViewportSize = Vector2.new(0, 0),
     CameraPos = Vector3.new(0, 0, 0),
 }
-
--- Только для плавности размера
-local LastSizes = {}
 
 -- Цвет здоровья
 local function GetHealthColor(percent)
@@ -57,7 +58,7 @@ local function GetHealthColor(percent)
     end
 end
 
--- Интерполяция только для размера
+-- Интерполяция
 local function Lerp(a, b, t)
     return a + (b - a) * t
 end
@@ -82,46 +83,46 @@ local function IsEnemy(plr)
     local theirTeam = theirChar.Parent and theirChar.Parent.Name or "Enemy"
     local isEnemy = myTeam ~= theirTeam
     
-    return isEnemy and Settings.ShowEnemies or (not isEnemy and Settings.ShowTeammates)
+    return isEnemy and ESP.ShowEnemies or (not isEnemy and ESP.ShowTeammates)
 end
 
--- Получение дистанции в метрах
+-- Получение дистанции
 local function GetDistance(pos)
     local dist = (Cache.CameraPos - pos).Magnitude
-    return math.floor(dist / 3.28) -- Конвертация в метры (приблизительно)
+    return math.floor(dist / 3.28)
 end
 
 -- Создание ESP для игрока
 local function CreateESP(plr)
-    if ESPObjects[plr] then return end
+    if ESP.Objects[plr] then return end
     
     local objects = {}
     
     -- Box
     objects.Box = Drawing.new("Square")
-    objects.Box.Thickness = Settings.BoxThickness
+    objects.Box.Thickness = ESP.BoxThickness
     objects.Box.Filled = false
-    objects.Box.Color = Settings.BoxColor
+    objects.Box.Color = ESP.BoxColor
     objects.Box.Transparency = 1
     objects.Box.Visible = false
     
     -- Name
     objects.Name = Drawing.new("Text")
     objects.Name.Text = plr.Name
-    objects.Name.Size = Settings.NameSize
-    objects.Name.Color = Settings.NameColor
+    objects.Name.Size = ESP.NameSize
+    objects.Name.Color = ESP.NameColor
     objects.Name.Center = true
     objects.Name.Outline = true
-    objects.Name.OutlineColor = Settings.OutlineColor
+    objects.Name.OutlineColor = ESP.OutlineColor
     objects.Name.Visible = false
     
     -- Distance
     objects.Distance = Drawing.new("Text")
-    objects.Distance.Size = Settings.DistanceSize
-    objects.Distance.Color = Settings.DistanceColor
+    objects.Distance.Size = ESP.DistanceSize
+    objects.Distance.Color = ESP.DistanceColor
     objects.Distance.Center = true
     objects.Distance.Outline = true
-    objects.Distance.OutlineColor = Settings.OutlineColor
+    objects.Distance.OutlineColor = ESP.OutlineColor
     objects.Distance.Visible = false
     
     -- Health Bar (фон)
@@ -146,20 +147,20 @@ local function CreateESP(plr)
     objects.HealthText.Color = Color3.fromRGB(255, 255, 255)
     objects.HealthText.Center = true
     objects.HealthText.Outline = true
-    objects.HealthText.OutlineColor = Settings.OutlineColor
+    objects.HealthText.OutlineColor = ESP.OutlineColor
     objects.HealthText.Visible = false
     
-    ESPObjects[plr] = objects
+    ESP.Objects[plr] = objects
     LastSizes[plr] = nil
 end
 
 -- Удаление ESP для игрока
 local function RemoveESP(plr)
-    if ESPObjects[plr] then
-        for _, obj in pairs(ESPObjects[plr]) do
+    if ESP.Objects[plr] then
+        for _, obj in pairs(ESP.Objects[plr]) do
             obj:Remove()
         end
-        ESPObjects[plr] = nil
+        ESP.Objects[plr] = nil
     end
     LastSizes[plr] = nil
 end
@@ -177,14 +178,25 @@ local function IsOnScreen(x, y, z)
            y >= 0 and y <= Cache.ViewportSize.Y
 end
 
--- RenderStepped для максимальной точности
+-- ОСНОВНОЙ ЦИКЛ (читает настройки каждый кадр - как в Kiriot)
 RunService.RenderStepped:Connect(function()
-    if not Settings.Enabled then return end
-    
+    -- Кэшируем часто используемые значения
     Cache.ViewportSize = Camera.ViewportSize
     Cache.CameraPos = Camera.CFrame.Position
     
-    for plr, objs in pairs(ESPObjects) do
+    -- Проверяем включен ли ESP (читаем каждый кадр)
+    if not ESP.Enabled then
+        -- Если ESP выключен - прячем все объекты
+        for plr, objs in pairs(ESP.Objects) do
+            for _, obj in pairs(objs) do
+                obj.Visible = false
+            end
+        end
+        return
+    end
+    
+    -- Основной цикл отрисовки
+    for plr, objs in pairs(ESP.Objects) do
         local char = plr.Character
         if not char then 
             for _, obj in pairs(objs) do obj.Visible = false end
@@ -201,14 +213,14 @@ RunService.RenderStepped:Connect(function()
             continue
         end
         
-        -- Проверка дистанции
+        -- Проверка дистанции (читаем каждый кадр)
         local distance = (Cache.CameraPos - hrp.Position).Magnitude
-        if distance > Settings.MaxDistance then
+        if distance > ESP.MaxDistance then
             for _, obj in pairs(objs) do obj.Visible = false end
             continue
         end
         
-        -- Проверка врага
+        -- Проверка врага (читаем каждый кадр)
         if not IsEnemy(plr) then
             for _, obj in pairs(objs) do obj.Visible = false end
             continue
@@ -244,10 +256,11 @@ RunService.RenderStepped:Connect(function()
         local healthPercent = health / maxHealth
         local healthColor = GetHealthColor(healthPercent)
         
-        -- Обновляем Box
-        if Settings.BoxEnabled then
+        -- Обновляем Box (с ТЕКУЩИМИ настройками)
+        if ESP.BoxEnabled then
             objs.Box.Position = Vector2.new(finalRootX - width/2, finalRootY - height/2)
             
+            -- Плавность размера
             if LastSizes[plr] then
                 local newSize = Vector2.new(width, height)
                 local smoothSize = LerpVector2(LastSizes[plr], newSize, 0.5)
@@ -258,38 +271,41 @@ RunService.RenderStepped:Connect(function()
                 LastSizes[plr] = Vector2.new(width, height)
             end
             
-            objs.Box.Color = Settings.BoxColor
-            objs.Box.Thickness = Settings.BoxThickness
+            -- Применяем текущие настройки
+            objs.Box.Color = ESP.BoxColor
+            objs.Box.Thickness = ESP.BoxThickness
             objs.Box.Visible = true
         else
             objs.Box.Visible = false
         end
         
-        -- Обновляем Name (сверху)
-        if Settings.NameEnabled then
+        -- Обновляем Name (с ТЕКУЩИМИ настройками)
+        if ESP.NameEnabled then
             objs.Name.Position = Vector2.new(finalRootX, finalRootY - height/2 - 20)
-            objs.Name.Color = Settings.NameColor
-            objs.Name.OutlineColor = Settings.OutlineColor
+            objs.Name.Color = ESP.NameColor
+            objs.Name.OutlineColor = ESP.OutlineColor
+            objs.Name.Size = ESP.NameSize  -- обновляем размер
             objs.Name.Visible = true
         else
             objs.Name.Visible = false
         end
         
-        -- Обновляем Distance (снизу)
-        if Settings.DistanceEnabled then
+        -- Обновляем Distance (с ТЕКУЩИМИ настройками)
+        if ESP.DistanceEnabled then
             local distMeters = GetDistance(hrp.Position)
             objs.Distance.Text = distMeters .. "m"
             objs.Distance.Position = Vector2.new(finalRootX, finalRootY + height/2 + 20)
-            objs.Distance.Color = Settings.DistanceColor
-            objs.Distance.OutlineColor = Settings.OutlineColor
+            objs.Distance.Color = ESP.DistanceColor
+            objs.Distance.OutlineColor = ESP.OutlineColor
+            objs.Distance.Size = ESP.DistanceSize  -- обновляем размер
             objs.Distance.Visible = true
         else
             objs.Distance.Visible = false
         end
         
-        -- Обновляем Health Bar
-        if Settings.HealthEnabled then
-            local barWidth = Settings.HealthBarWidth
+        -- Обновляем Health Bar (с ТЕКУЩИМИ настройками)
+        if ESP.HealthEnabled then
+            local barWidth = ESP.HealthBarWidth
             local barX = finalRootX - width/2 - barWidth - 2
             local barY = finalRootY - height/2
             
@@ -309,10 +325,10 @@ RunService.RenderStepped:Connect(function()
             objs.HealthBarFill.Visible = false
         end
         
-        -- Обновляем Health Text
-        if Settings.HealthTextEnabled then
+        -- Обновляем Health Text (с ТЕКУЩИМИ настройками)
+        if ESP.HealthTextEnabled then
             objs.HealthText.Color = healthColor
-            objs.HealthText.OutlineColor = Settings.OutlineColor
+            objs.HealthText.OutlineColor = ESP.OutlineColor
             objs.HealthText.Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
             objs.HealthText.Position = Vector2.new(finalRootX - width/2 - 35, finalRootY)
             objs.HealthText.Visible = true
@@ -328,10 +344,11 @@ local function OnCharacterAdded(plr)
     CreateESP(plr)
 end
 
+-- Подключаем события
 Players.PlayerAdded:Connect(function(plr)
     CreateESP(plr)
     
-    Connections[plr] = {
+    ESP.Connections[plr] = {
         plr.CharacterAdded:Connect(function() OnCharacterAdded(plr) end),
         plr.CharacterRemoving:Connect(function() RemoveESP(plr) end),
     }
@@ -339,11 +356,11 @@ end)
 
 Players.PlayerRemoving:Connect(function(plr)
     RemoveESP(plr)
-    if Connections[plr] then
-        for _, conn in pairs(Connections[plr]) do
+    if ESP.Connections[plr] then
+        for _, conn in pairs(ESP.Connections[plr]) do
             conn:Disconnect()
         end
-        Connections[plr] = nil
+        ESP.Connections[plr] = nil
     end
 end)
 
@@ -352,16 +369,14 @@ for _, plr in Players:GetPlayers() do
     if plr ~= LocalPlayer then
         CreateESP(plr)
         
-        Connections[plr] = {
+        ESP.Connections[plr] = {
             plr.CharacterAdded:Connect(function() OnCharacterAdded(plr) end),
             plr.CharacterRemoving:Connect(function() RemoveESP(plr) end),
         }
     end
 end
 
-print("ESP loaded - Added Distance display at bottom")
-print("Settings: Box=" .. tostring(Settings.BoxEnabled) .. 
-      " Name=" .. tostring(Settings.NameEnabled) .. 
-      " Health=" .. tostring(Settings.HealthEnabled) ..
-      " HealthText=" .. tostring(Settings.HealthTextEnabled) ..
-      " Distance=" .. tostring(Settings.DistanceEnabled))
+print("ESP loaded - можно менять настройки через ESP.Enabled, ESP.BoxEnabled и т.д.")
+
+-- ВОЗВРАЩАЕМ ТАБЛИЦУ (как в Kiriot)
+return ESP
