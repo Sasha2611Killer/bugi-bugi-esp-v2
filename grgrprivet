@@ -25,7 +25,7 @@ ESP.Settings = {
     ShowSelf = false,
     BoxThickness = 1.6,
     MaxRenderDistance = 1000,
-    Debug = true, -- Для отладки
+    Debug = true,
 }
 
 -- Внутренние переменные
@@ -37,6 +37,7 @@ local Humanoids = {}
 local Connections = {}
 local PlayerData = {}
 local PlayerState = {} -- "alive", "dead", "respawning"
+local PendingDestroy = {} -- Игроки которые должны быть удалены
 
 -- Для отладки
 local function DebugLog(...)
@@ -90,28 +91,13 @@ local function ClearPlayerData(plr)
     PlayerData[plr] = nil
 end
 
--- Очистка соединений (НО НЕ УДАЛЯЕМ CharacterAdded!)
-local function ClearConnections(plr, keepCharAdded)
+-- Очистка всех соединений
+local function ClearAllConnections(plr)
     if Connections[plr] then
-        local charAddedConn = nil
-        
-        -- Сохраняем CharacterAdded если нужно
-        if keepCharAdded and Connections[plr].charAdded then
-            charAddedConn = Connections[plr].charAdded
-        end
-        
         for name, conn in pairs(Connections[plr]) do
-            if name ~= "charAdded" or not keepCharAdded then
-                pcall(function() conn:Disconnect() end)
-            end
+            pcall(function() conn:Disconnect() end)
         end
-        
-        Connections[plr] = {}
-        
-        -- Восстанавливаем CharacterAdded
-        if charAddedConn then
-            Connections[plr].charAdded = charAddedConn
-        end
+        Connections[plr] = nil
     end
 end
 
@@ -123,6 +109,7 @@ local function DestroyESP(plr)
         if obj then
             pcall(function() 
                 obj:Remove()
+                obj = nil
             end)
         end
     end
@@ -143,19 +130,20 @@ local function DestroyESP(plr)
     HealthTexts[plr] = nil
 
     ClearPlayerData(plr)
-    -- НЕ очищаем Connections полностью, сохраняем CharacterAdded
-    ClearConnections(plr, true)
+    ClearAllConnections(plr)
     PlayerState[plr] = "dead"
+    PendingDestroy[plr] = nil
+    
+    DebugLog("ESP destroyed for", plr.Name)
 end
 
 -- Создание ESP для игрока
 local function CreateESP(plr)
     DebugLog("Creating ESP for", plr.Name)
     
-    -- Если уже есть - не создаем
+    -- Сначала удаляем старый если есть
     if Boxes[plr] then 
-        DebugLog("ESP already exists for", plr.Name)
-        return Boxes[plr]
+        DestroyESP(plr)
     end
 
     local box = Drawing.new("Square")
@@ -328,31 +316,27 @@ end
 -- Обработка смерти игрока
 local function OnPlayerDied(plr)
     DebugLog("Player died:", plr.Name)
-    -- Удаляем ESP мертвого игрока
-    DestroyESP(plr)
+    PendingDestroy[plr] = true
 end
 
 -- Обработка добавления персонажа (респавн)
 local function OnCharacterAdded(plr, char)
-    DebugLog("Character added for", plr.Name, "- creating ESP")
+    DebugLog("Character added for", plr.Name)
     
-    -- Создаем новый ESP (DestroyESP уже вызван при смерти)
+    -- Всегда создаем новый ESP (старый уже должен быть удален)
     CreateESP(plr)
     
-    -- Очищаем старые соединения (кроме CharacterAdded)
-    ClearConnections(plr, true)
+    -- Очищаем старые соединения
+    ClearAllConnections(plr)
+    Connections[plr] = {}
     
-    -- Создаем новые соединения для этого персонажа
+    -- Создаем новые соединения
     local humanoid = GetHumanoid(char)
     if humanoid then
         -- Отслеживаем смерть
         local diedConn = humanoid.Died:Connect(function()
             OnPlayerDied(plr)
         end)
-        
-        if not Connections[plr] then
-            Connections[plr] = {}
-        end
         Connections[plr].died = diedConn
         
         -- Отслеживаем изменения здоровья
@@ -372,9 +356,7 @@ local function OnCharacterAdded(plr, char)
     end)
     Connections[plr].charRemoved = charRemovedConn
     
-    -- Обновляем Humanoid
     UpdateHumanoid(plr)
-    
     DebugLog("ESP setup complete for", plr.Name)
 end
 
@@ -391,9 +373,7 @@ local function OnPlayerAdded(plr)
         OnCharacterAdded(plr, char)
     end)
 
-    if not Connections[plr] then
-        Connections[plr] = {}
-    end
+    Connections[plr] = Connections[plr] or {}
     Connections[plr].charAdded = charAddedConn
 
     -- Если персонаж уже есть - обрабатываем его сразу
@@ -438,6 +418,11 @@ setmetatable(ESP.Settings, SettingsMetatable)
 
 -- Основной цикл
 RunService.RenderStepped:Connect(function()
+    -- Сначала обрабатываем pending destroy
+    for plr, _ in pairs(PendingDestroy) do
+        DestroyESP(plr)
+    end
+    
     for plr, box in pairs(Boxes) do
         if plr == LocalPlayer then
             continue
@@ -445,7 +430,7 @@ RunService.RenderStepped:Connect(function()
 
         -- Проверяем состояние игрока
         if PlayerState[plr] ~= "alive" then
-            if box.Visible then
+            if box and box.Visible then
                 box.Visible = false
                 if Names[plr] then Names[plr].Visible = false end
                 if HealthBars[plr] then
@@ -458,7 +443,7 @@ RunService.RenderStepped:Connect(function()
         end
 
         if not ESP.Settings.Enabled then
-            if box.Visible then
+            if box and box.Visible then
                 box.Visible = false
                 if Names[plr] then Names[plr].Visible = false end
                 if HealthBars[plr] then
@@ -484,7 +469,7 @@ RunService.RenderStepped:Connect(function()
         local head = char:FindFirstChild("Head")
         
         if not hrp or not head then
-            if box.Visible then
+            if box and box.Visible then
                 box.Visible = false
                 if Names[plr] then Names[plr].Visible = false end
                 if HealthBars[plr] then
@@ -498,7 +483,7 @@ RunService.RenderStepped:Connect(function()
 
         -- Проверка на врага
         if not IsEnemy(plr) then
-            if box.Visible then
+            if box and box.Visible then
                 box.Visible = false
                 if Names[plr] then Names[plr].Visible = false end
                 if HealthBars[plr] then
@@ -514,7 +499,7 @@ RunService.RenderStepped:Connect(function()
         local humanoid = Humanoids[plr]
         if not humanoid or not humanoid.Parent then
             if not UpdateHumanoid(plr) then
-                if box.Visible then
+                if box and box.Visible then
                     box.Visible = false
                     if Names[plr] then Names[plr].Visible = false end
                     if HealthBars[plr] then
@@ -531,7 +516,7 @@ RunService.RenderStepped:Connect(function()
         -- Получаем здоровье
         local health, maxHealth = GetSafeHealthValues(humanoid)
         if health <= 0 or maxHealth <= 0 then
-            if box.Visible then
+            if box and box.Visible then
                 box.Visible = false
                 if Names[plr] then Names[plr].Visible = false end
                 if HealthBars[plr] then
@@ -554,7 +539,7 @@ RunService.RenderStepped:Connect(function()
         local legVisible = IsOnScreen(legScreen)
         
         if not rootVisible and not headVisible and not legVisible then
-            if box.Visible then
+            if box and box.Visible then
                 box.Visible = false
                 if Names[plr] then Names[plr].Visible = false end
                 if HealthBars[plr] then
@@ -569,7 +554,7 @@ RunService.RenderStepped:Connect(function()
         -- Проверка дистанции
         local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
         if distance > ESP.Settings.MaxRenderDistance then
-            if box.Visible then
+            if box and box.Visible then
                 box.Visible = false
                 if Names[plr] then Names[plr].Visible = false end
                 if HealthBars[plr] then
@@ -600,7 +585,7 @@ RunService.RenderStepped:Connect(function()
         
         -- Защита от слишком маленьких размеров
         if height < 10 or width < 5 then
-            if box.Visible then
+            if box and box.Visible then
                 box.Visible = false
                 if Names[plr] then Names[plr].Visible = false end
                 if HealthBars[plr] then
