@@ -45,6 +45,22 @@ local Cache = {
     CameraPos = Vector3.new(0, 0, 0),
 }
 
+-- Функция полной очистки ESP
+local function ClearAllESP()
+    -- Удаляем все объекты Drawing
+    for plr, objs in pairs(ESP.Objects) do
+        for _, obj in pairs(objs) do
+            pcall(function() 
+                obj.Visible = false
+                obj:Remove() 
+            end)
+        end
+    end
+    -- Очищаем таблицы
+    ESP.Objects = {}
+    LastSizes = {}
+end
+
 -- Цвет здоровья
 local function GetHealthColor(percent)
     if percent > 0.6 then
@@ -158,7 +174,10 @@ end
 local function RemoveESP(plr)
     if ESP.Objects[plr] then
         for _, obj in pairs(ESP.Objects[plr]) do
-            obj:Remove()
+            pcall(function() 
+                obj.Visible = false
+                obj:Remove() 
+            end)
         end
         ESP.Objects[plr] = nil
     end
@@ -186,12 +205,8 @@ RunService.RenderStepped:Connect(function()
     
     -- Проверяем включен ли ESP (читаем каждый кадр)
     if not ESP.Enabled then
-        -- Если ESP выключен - прячем все объекты
-        for plr, objs in pairs(ESP.Objects) do
-            for _, obj in pairs(objs) do
-                obj.Visible = false
-            end
-        end
+        -- Если ESP выключен - ПОЛНОСТЬЮ УДАЛЯЕМ все объекты
+        ClearAllESP()
         return
     end
     
@@ -284,7 +299,7 @@ RunService.RenderStepped:Connect(function()
             objs.Name.Position = Vector2.new(finalRootX, finalRootY - height/2 - 20)
             objs.Name.Color = ESP.NameColor
             objs.Name.OutlineColor = ESP.OutlineColor
-            objs.Name.Size = ESP.NameSize  -- обновляем размер
+            objs.Name.Size = ESP.NameSize
             objs.Name.Visible = true
         else
             objs.Name.Visible = false
@@ -297,7 +312,7 @@ RunService.RenderStepped:Connect(function()
             objs.Distance.Position = Vector2.new(finalRootX, finalRootY + height/2 + 20)
             objs.Distance.Color = ESP.DistanceColor
             objs.Distance.OutlineColor = ESP.OutlineColor
-            objs.Distance.Size = ESP.DistanceSize  -- обновляем размер
+            objs.Distance.Size = ESP.DistanceSize
             objs.Distance.Visible = true
         else
             objs.Distance.Visible = false
@@ -377,6 +392,7 @@ for _, plr in Players:GetPlayers() do
 end
 
 print("ESP loaded - можно менять настройки через ESP.Enabled, ESP.BoxEnabled и т.д.")
+print("При ESP.Enabled = false все объекты полностью удаляются из памяти")
 
 -- ВОЗВРАЩАЕМ ТАБЛИЦУ (как в Kiriot)
 return ESP
