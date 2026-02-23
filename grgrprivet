@@ -25,192 +25,37 @@ ESP.Settings = {
     ShowSelf = false,
     BoxThickness = 1.6,
     MaxRenderDistance = 1000,
-    Debug = true, -- Для отладки
 }
 
 -- Внутренние переменные
-local Boxes = {}
-local Names = {}
-local HealthBars = {}
-local HealthTexts = {}
-local Humanoids = {}
-local Connections = {}
-local PlayerData = {}
-local PlayerState = {} -- "alive", "dead", "respawning"
+ESP.Objects = {} -- Все объекты ESP
+ESP.Overrides = {} -- Для кастомных функций (как в чужом коде)
 
--- Для отладки
-local function DebugLog(...)
-    if ESP.Settings.Debug then
-        print("[ESP]", ...)
-    end
-end
-
--- Проверяем режим камеры
-local function IsLockFirstPerson()
-    return LocalPlayer and LocalPlayer.CameraMode == Enum.CameraMode.LockFirstPerson
-end
-
--- Функция для проверки, враг ли игрок
-local function IsEnemy(plr)
-    if plr == LocalPlayer then 
-        return ESP.Settings.ShowSelf
-    end
-
-    local myChar = LocalPlayer.Character
-    local theirChar = plr.Character
-    if not myChar or not theirChar then return false end
-
-    local myTeam = "Enemy"
-    local theirTeam = "Enemy"
-    
-    pcall(function()
-        if myChar.Parent then
-            myTeam = myChar.Parent.Name
-        end
+-- Вспомогательные функции (аналог Framework)
+local function WorldToScreen(position)
+    local success, result = pcall(function()
+        return Camera:WorldToViewportPoint(position)
     end)
     
-    pcall(function()
-        if theirChar.Parent then
-            theirTeam = theirChar.Parent.Name
-        end
-    end)
-
-    return myTeam ~= theirTeam
-end
-
--- Функция для получения Humanoid
-local function GetHumanoid(character)
-    if not character then return nil end
-    return character:FindFirstChildOfClass("Humanoid")
-end
-
--- Очистка данных игрока
-local function ClearPlayerData(plr)
-    Humanoids[plr] = nil
-    PlayerData[plr] = nil
-end
-
--- Очистка соединений (НО НЕ УДАЛЯЕМ CharacterAdded!)
-local function ClearConnections(plr, keepCharAdded)
-    if Connections[plr] then
-        local charAddedConn = nil
-        
-        -- Сохраняем CharacterAdded если нужно
-        if keepCharAdded and Connections[plr].charAdded then
-            charAddedConn = Connections[plr].charAdded
-        end
-        
-        for name, conn in pairs(Connections[plr]) do
-            if name ~= "charAdded" or not keepCharAdded then
-                pcall(function() conn:Disconnect() end)
-            end
-        end
-        
-        Connections[plr] = {}
-        
-        -- Восстанавливаем CharacterAdded
-        if charAddedConn then
-            Connections[plr].charAdded = charAddedConn
-        end
+    if success and result then
+        return {
+            X = result.X,
+            Y = result.Y,
+            Z = result.Z,
+            OnScreen = result.Z > 0.1
+        }
     end
+    return {X = -1, Y = -1, Z = -1, OnScreen = false}
 end
 
--- Полное удаление ESP для игрока
-local function DestroyESP(plr)
-    DebugLog("Destroying ESP for", plr.Name)
-    
-    local function safeDestroy(obj)
-        if obj then
-            pcall(function() 
-                obj:Remove()
-            end)
-        end
-    end
-
-    safeDestroy(Boxes[plr])
-    Boxes[plr] = nil
-    
-    safeDestroy(Names[plr])
-    Names[plr] = nil
-    
-    if HealthBars[plr] then
-        safeDestroy(HealthBars[plr].bg)
-        safeDestroy(HealthBars[plr].fill)
-        HealthBars[plr] = nil
-    end
-    
-    safeDestroy(HealthTexts[plr])
-    HealthTexts[plr] = nil
-
-    ClearPlayerData(plr)
-    -- НЕ очищаем Connections полностью, сохраняем CharacterAdded
-    ClearConnections(plr, true)
-    PlayerState[plr] = "dead"
+local function IsOnScreen(screenPos)
+    return screenPos.OnScreen and 
+           screenPos.X >= 0 and screenPos.X <= Camera.ViewportSize.X and
+           screenPos.Y >= 0 and screenPos.Y <= Camera.ViewportSize.Y
 end
 
--- Создание ESP для игрока
-local function CreateESP(plr)
-    DebugLog("Creating ESP for", plr.Name)
-    
-    -- Если уже есть - не создаем
-    if Boxes[plr] then 
-        DebugLog("ESP already exists for", plr.Name)
-        return Boxes[plr]
-    end
-
-    local box = Drawing.new("Square")
-    box.Thickness = ESP.Settings.BoxThickness
-    box.Filled = false
-    box.Color = ESP.Settings.BoxColor
-    box.Transparency = ESP.Settings.Transparency
-    box.Visible = false
-    Boxes[plr] = box
-
-    local nameTag = Drawing.new("Text")
-    nameTag.Text = plr.Name
-    nameTag.Size = 16
-    nameTag.Color = ESP.Settings.NameColor
-    nameTag.Center = true
-    nameTag.Outline = true
-    nameTag.OutlineColor = ESP.Settings.OutlineColor
-    nameTag.Visible = false
-    Names[plr] = nameTag
-
-    local healthBarBg = Drawing.new("Square")
-    healthBarBg.Thickness = 1
-    healthBarBg.Filled = true
-    healthBarBg.Color = Color3.fromRGB(0, 0, 0)
-    healthBarBg.Transparency = 0.7
-    healthBarBg.Visible = false
-    
-    local healthBarFill = Drawing.new("Square")
-    healthBarFill.Thickness = 1
-    healthBarFill.Filled = true
-    healthBarFill.Color = Color3.fromRGB(0, 255, 0)
-    healthBarFill.Transparency = 0.7
-    healthBarFill.Visible = false
-    
-    HealthBars[plr] = {bg = healthBarBg, fill = healthBarFill}
-
-    local healthText = Drawing.new("Text")
-    healthText.Size = 14
-    healthText.Color = Color3.fromRGB(255, 255, 255)
-    healthText.Center = true
-    healthText.Outline = true
-    healthText.OutlineColor = ESP.Settings.OutlineColor
-    healthText.Visible = false
-    HealthTexts[plr] = healthText
-    
-    PlayerState[plr] = "alive"
-    DebugLog("ESP created for", plr.Name)
-    
-    return box
-end
-
--- Получение цвета здоровья
 local function GetHealthColor(percent)
     percent = math.max(0, math.min(1, percent))
-    
     if percent > 0.6 then
         return Color3.fromRGB(0, 255, 0)
     elseif percent > 0.3 then
@@ -222,491 +67,361 @@ local function GetHealthColor(percent)
     end
 end
 
--- Безопасное получение значений здоровья
-local function GetSafeHealthValues(humanoid)
-    if not humanoid then
-        return 0, 100
+-- Функции для получения данных (с поддержкой Overrides)
+function ESP:GetCharacter(plr)
+    if self.Overrides.GetCharacter then
+        return self.Overrides.GetCharacter(plr)
     end
-
-    local maxHealth = 100
-    local health = 0
-    
-    pcall(function()
-        maxHealth = humanoid.MaxHealth
-        if maxHealth <= 0 then maxHealth = 100 end
-    end)
-    
-    pcall(function()
-        health = humanoid.Health
-        if health < 0 then health = 0 end
-    end)
-
-    return health, maxHealth
+    return plr.Character
 end
 
--- Функция для конвертации 3D в 2D
-local function WorldToScreen(position)
-    local success, result = pcall(function()
-        return Camera:WorldToViewportPoint(position)
-    end)
+function ESP:GetHumanoid(character)
+    if not character then return nil end
+    if self.Overrides.GetHumanoid then
+        return self.Overrides.GetHumanoid(character)
+    end
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+function ESP:GetTeam(plr)
+    if self.Overrides.GetTeam then
+        return self.Overrides.GetTeam(plr)
+    end
+    local char = self:GetCharacter(plr)
+    if char and char.Parent then
+        return char.Parent.Name
+    end
+    return "Enemy"
+end
+
+function ESP:IsEnemy(plr)
+    if plr == LocalPlayer then 
+        return ESP.Settings.ShowSelf
+    end
     
-    if success and result then
-        if typeof(result) == "Vector3" then
-            return {
-                X = result.X,
-                Y = result.Y,
-                Z = result.Z,
-                Visible = result.Z > 0.1
-            }
-        elseif type(result) == "table" then
-            return {
-                X = result.X or result[1] or 0,
-                Y = result.Y or result[2] or 0,
-                Z = result.Z or result[3] or 1,
-                Visible = (result.Z or result[3] or 1) > 0.1
-            }
+    if self.Overrides.IsEnemy then
+        return self.Overrides.IsEnemy(plr)
+    end
+    
+    local myTeam = self:GetTeam(LocalPlayer)
+    local theirTeam = self:GetTeam(plr)
+    local isEnemy = myTeam ~= theirTeam
+    
+    if isEnemy then
+        return ESP.Settings.ShowEnemies
+    else
+        return ESP.Settings.ShowTeammates
+    end
+end
+
+-- Метатаблица для игроков (как в чужом коде)
+local PlayerMetatable = {}
+PlayerMetatable.__index = PlayerMetatable
+
+function PlayerMetatable:Destroy()
+    for name, component in pairs(self.Components) do
+        if component then
+            pcall(function() component:Remove() end)
+        end
+    end
+    self.Components = {}
+    ESP.Objects[self.Player] = nil
+end
+
+function PlayerMetatable:CreateComponents()
+    local c = {}
+    
+    -- Box
+    c.Box = Drawing.new("Square")
+    c.Box.Thickness = ESP.Settings.BoxThickness
+    c.Box.Filled = false
+    c.Box.Visible = false
+    
+    -- Name
+    c.Name = Drawing.new("Text")
+    c.Name.Text = self.Player.Name
+    c.Name.Size = 16
+    c.Name.Center = true
+    c.Name.Outline = true
+    c.Name.Visible = false
+    
+    -- Health Bar Background
+    c.HealthBarBg = Drawing.new("Square")
+    c.HealthBarBg.Thickness = 1
+    c.HealthBarBg.Filled = true
+    c.HealthBarBg.Color = Color3.fromRGB(0, 0, 0)
+    c.HealthBarBg.Transparency = 0.7
+    c.HealthBarBg.Visible = false
+    
+    -- Health Bar Fill
+    c.HealthBarFill = Drawing.new("Square")
+    c.HealthBarFill.Thickness = 1
+    c.HealthBarFill.Filled = true
+    c.HealthBarFill.Visible = false
+    
+    -- Health Text
+    c.HealthText = Drawing.new("Text")
+    c.HealthText.Size = 14
+    c.HealthText.Center = true
+    c.HealthText.Outline = true
+    c.HealthText.Visible = false
+    
+    self.Components = c
+end
+
+function PlayerMetatable:Update()
+    local c = self.Components
+    if not c then return end
+    
+    -- Проверка настроек
+    if not ESP.Settings.Enabled then
+        c.Box.Visible = false
+        c.Name.Visible = false
+        c.HealthBarBg.Visible = false
+        c.HealthBarFill.Visible = false
+        c.HealthText.Visible = false
+        return
+    end
+    
+    -- Получаем персонажа
+    local char = ESP:GetCharacter(self.Player)
+    if not char or not char.Parent then
+        self:Destroy()
+        return
+    end
+    
+    -- Получаем части тела
+    local hrp = char:FindFirstChild("HumanoidRootPart") or 
+                char:FindFirstChild("Torso") or 
+                char:FindFirstChild("UpperTorso")
+    local head = char:FindFirstChild("Head")
+    
+    if not hrp or not head then
+        c.Box.Visible = false
+        c.Name.Visible = false
+        c.HealthBarBg.Visible = false
+        c.HealthBarFill.Visible = false
+        c.HealthText.Visible = false
+        return
+    end
+    
+    -- Проверка на врага
+    if not ESP:IsEnemy(self.Player) then
+        c.Box.Visible = false
+        c.Name.Visible = false
+        c.HealthBarBg.Visible = false
+        c.HealthBarFill.Visible = false
+        c.HealthText.Visible = false
+        return
+    end
+    
+    -- Получаем Humanoid
+    local humanoid = ESP:GetHumanoid(char)
+    if not humanoid or humanoid.Health <= 0 then
+        c.Box.Visible = false
+        c.Name.Visible = false
+        c.HealthBarBg.Visible = false
+        c.HealthBarFill.Visible = false
+        c.HealthText.Visible = false
+        return
+    end
+    
+    -- Получаем позиции на экране
+    local rootPos = WorldToScreen(hrp.Position)
+    local headPos = WorldToScreen(head.Position + Vector3.new(0, 0.5, 0))
+    local legPos = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
+    
+    -- Проверяем видимость
+    local rootVisible = IsOnScreen(rootPos)
+    local headVisible = IsOnScreen(headPos)
+    local legVisible = IsOnScreen(legPos)
+    
+    if not rootVisible and not headVisible and not legVisible then
+        c.Box.Visible = false
+        c.Name.Visible = false
+        c.HealthBarBg.Visible = false
+        c.HealthBarFill.Visible = false
+        c.HealthText.Visible = false
+        return
+    end
+    
+    -- Проверка дистанции
+    local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
+    if distance > ESP.Settings.MaxRenderDistance then
+        c.Box.Visible = false
+        c.Name.Visible = false
+        c.HealthBarBg.Visible = false
+        c.HealthBarFill.Visible = false
+        c.HealthText.Visible = false
+        return
+    end
+    
+    -- Используем доступные координаты
+    local finalRoot = rootVisible and rootPos or (headVisible and headPos or legPos)
+    local finalHead = headVisible and headPos or (rootVisible and rootPos or legPos)
+    local finalLeg = legVisible and legPos or (rootVisible and rootPos or headPos)
+    
+    -- Корректируем Y координаты
+    if not headVisible and rootVisible then
+        finalHead.Y = finalRoot.Y - 50
+    end
+    if not legVisible and rootVisible then
+        finalLeg.Y = finalRoot.Y + 50
+    end
+    
+    -- Вычисляем размеры
+    local height = math.abs(finalHead.Y - finalLeg.Y)
+    local width = height * 0.55
+    
+    if height < 10 or width < 5 then
+        c.Box.Visible = false
+        c.Name.Visible = false
+        c.HealthBarBg.Visible = false
+        c.HealthBarFill.Visible = false
+        c.HealthText.Visible = false
+        return
+    end
+    
+    local health = humanoid.Health
+    local maxHealth = humanoid.MaxHealth
+    local healthPercent = health / maxHealth
+    local healthColor = GetHealthColor(healthPercent)
+    
+    -- Обновляем Box
+    if ESP.Settings.EspBox then
+        c.Box.Size = Vector2.new(width, height)
+        c.Box.Position = Vector2.new(finalRoot.X - width/2, finalRoot.Y - height/2)
+        c.Box.Color = ESP.Settings.BoxColor
+        c.Box.Thickness = ESP.Settings.BoxThickness
+        c.Box.Transparency = ESP.Settings.Transparency
+        c.Box.Visible = true
+    else
+        c.Box.Visible = false
+    end
+    
+    -- Обновляем Name
+    if ESP.Settings.EspName then
+        c.Name.Position = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
+        c.Name.Color = ESP.Settings.NameColor
+        c.Name.OutlineColor = ESP.Settings.OutlineColor
+        c.Name.Visible = true
+    else
+        c.Name.Visible = false
+    end
+    
+    -- Обновляем HealthBar
+    if ESP.Settings.EspHealthBar then
+        local barWidth = ESP.Settings.HealthBarWidth
+        local barX = finalRoot.X - width/2 - barWidth - 2
+        local barY = finalRoot.Y - height/2
+        
+        -- Background
+        c.HealthBarBg.Size = Vector2.new(barWidth, height)
+        c.HealthBarBg.Position = Vector2.new(barX, barY)
+        c.HealthBarBg.Visible = true
+        
+        -- Fill
+        local fillHeight = height * healthPercent
+        c.HealthBarFill.Size = Vector2.new(barWidth, fillHeight)
+        c.HealthBarFill.Position = Vector2.new(barX, barY + (height - fillHeight))
+        c.HealthBarFill.Color = healthColor
+        c.HealthBarFill.Visible = true
+    else
+        c.HealthBarBg.Visible = false
+        c.HealthBarFill.Visible = false
+    end
+    
+    -- Обновляем HealthText
+    if ESP.Settings.EspHealthText then
+        c.HealthText.Color = healthColor
+        c.HealthText.OutlineColor = ESP.Settings.OutlineColor
+        c.HealthText.Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
+        c.HealthText.Position = Vector2.new(finalRoot.X - width/2 - 35, finalRoot.Y)
+        c.HealthText.Visible = true
+    else
+        c.HealthText.Visible = false
+    end
+end
+
+-- Функция создания ESP для игрока
+function ESP:AddPlayer(plr)
+    if plr == LocalPlayer then return end
+    if self.Objects[plr] then 
+        self.Objects[plr]:Destroy()
+    end
+    
+    local obj = setmetatable({
+        Player = plr,
+        Components = {}
+    }, PlayerMetatable)
+    
+    obj:CreateComponents()
+    self.Objects[plr] = obj
+    
+    -- Отслеживаем死亡 и респавн
+    local function onCharacterAdded(char)
+        -- Пересоздаем компоненты при респавне
+        obj:Destroy()
+        obj:CreateComponents()
+    end
+    
+    local function onCharacterRemoving()
+        obj:Destroy()
+    end
+    
+    -- Очищаем старые соединения
+    if obj.Connections then
+        for _, conn in pairs(obj.Connections) do
+            conn:Disconnect()
         end
     end
     
-    success, result = pcall(function()
-        return Camera:WorldToScreenPoint(position)
-    end)
-    
-    if success and result then
-        return {
-            X = result.X,
-            Y = result.Y,
-            Z = result.Z,
-            Visible = result.Z > 0.1
-        }
-    end
-    
-    return {
-        X = Camera.ViewportSize.X / 2,
-        Y = Camera.ViewportSize.Y / 2,
-        Z = -1,
-        Visible = false
+    obj.Connections = {
+        plr.CharacterAdded:Connect(onCharacterAdded),
+        plr.CharacterRemoving:Connect(onCharacterRemoving)
     }
-end
-
--- Проверка видимости на экране
-local function IsOnScreen(screenPos)
-    if not screenPos.Visible or screenPos.Z <= 0.1 then
-        return false
+    
+    if plr.Character then
+        onCharacterAdded(plr.Character)
     end
-    
-    if screenPos.X < 0 or screenPos.X > Camera.ViewportSize.X then
-        return false
-    end
-    
-    if screenPos.Y < 0 or screenPos.Y > Camera.ViewportSize.Y then
-        return false
-    end
-    
-    return true
-end
-
--- Обновление Humanoid
-local function UpdateHumanoid(plr)
-    local char = plr.Character
-    if char then
-        local newHumanoid = GetHumanoid(char)
-        if newHumanoid and newHumanoid.Health > 0 then
-            Humanoids[plr] = newHumanoid
-            PlayerData[plr] = {
-                lastUpdate = tick(),
-                valid = true
-            }
-            return true
-        end
-    end
-
-    ClearPlayerData(plr)
-    return false
-end
-
--- Обработка смерти игрока
-local function OnPlayerDied(plr)
-    DebugLog("Player died:", plr.Name)
-    -- Удаляем ESP мертвого игрока
-    DestroyESP(plr)
-end
-
--- Обработка добавления персонажа (респавн)
-local function OnCharacterAdded(plr, char)
-    DebugLog("Character added for", plr.Name, "- creating ESP")
-    
-    -- Создаем новый ESP (DestroyESP уже вызван при смерти)
-    CreateESP(plr)
-    
-    -- Очищаем старые соединения (кроме CharacterAdded)
-    ClearConnections(plr, true)
-    
-    -- Создаем новые соединения для этого персонажа
-    local humanoid = GetHumanoid(char)
-    if humanoid then
-        -- Отслеживаем смерть
-        local diedConn = humanoid.Died:Connect(function()
-            OnPlayerDied(plr)
-        end)
-        
-        if not Connections[plr] then
-            Connections[plr] = {}
-        end
-        Connections[plr].died = diedConn
-        
-        -- Отслеживаем изменения здоровья
-        local healthChangedConn = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
-            PlayerData[plr] = PlayerData[plr] or {}
-            PlayerData[plr].healthChanged = true
-        end)
-        Connections[plr].healthChanged = healthChangedConn
-    end
-
-    -- Отслеживаем удаление персонажа
-    local charRemovedConn = char.AncestryChanged:Connect(function()
-        if not char.Parent then
-            DebugLog("Character removed for", plr.Name)
-            OnPlayerDied(plr)
-        end
-    end)
-    Connections[plr].charRemoved = charRemovedConn
-    
-    -- Обновляем Humanoid
-    UpdateHumanoid(plr)
-    
-    DebugLog("ESP setup complete for", plr.Name)
 end
 
 -- Обработка добавления игрока
-local function OnPlayerAdded(plr)
-    if plr == LocalPlayer then
-        return
+Players.PlayerAdded:Connect(function(plr)
+    ESP:AddPlayer(plr)
+end)
+
+Players.PlayerRemoving:Connect(function(plr)
+    if ESP.Objects[plr] then
+        ESP.Objects[plr]:Destroy()
     end
+end)
 
-    DebugLog("Player added:", plr.Name)
-
-    -- Создаем соединение для появления персонажа
-    local charAddedConn = plr.CharacterAdded:Connect(function(char)
-        OnCharacterAdded(plr, char)
-    end)
-
-    if not Connections[plr] then
-        Connections[plr] = {}
-    end
-    Connections[plr].charAdded = charAddedConn
-
-    -- Если персонаж уже есть - обрабатываем его сразу
-    if plr.Character then
-        DebugLog("Player already has character:", plr.Name)
-        OnCharacterAdded(plr, plr.Character)
-    else
-        DebugLog("Player waiting for character:", plr.Name)
-        PlayerState[plr] = "respawning"
-    end
-end
-
--- Отслеживаем изменения в настройках
-local SettingsMetatable = {
-    __newindex = function(t, key, value)
-        rawset(t, key, value)
-
-        if key == "BoxColor" or key == "BoxThickness" then
-            for plr, box in pairs(Boxes) do
-                if box then
-                    box.Color = ESP.Settings.BoxColor
-                    box.Thickness = ESP.Settings.BoxThickness
-                end
-            end
-        elseif key == "NameColor" or key == "OutlineColor" then
-            for plr, nameTag in pairs(Names) do
-                if nameTag then
-                    nameTag.Color = ESP.Settings.NameColor
-                    nameTag.OutlineColor = ESP.Settings.OutlineColor
-                end
-            end
-            for plr, healthText in pairs(HealthTexts) do
-                if healthText then
-                    healthText.OutlineColor = ESP.Settings.OutlineColor
-                end
-            end
-        end
-    end
-}
-
-setmetatable(ESP.Settings, SettingsMetatable)
-
--- Основная функция рендера (заменяет RenderStepped)
-local function OnRender()
-    for plr, box in pairs(Boxes) do
-        if plr == LocalPlayer then
-            continue
-        end
-
-        -- Проверяем состояние игрока
-        if PlayerState[plr] ~= "alive" then
-            if box.Visible then
-                box.Visible = false
-                if Names[plr] then Names[plr].Visible = false end
-                if HealthBars[plr] then
-                    if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-                    if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-                end
-                if HealthTexts[plr] then HealthTexts[plr].Visible = false end
-            end
-            continue
-        end
-
-        if not ESP.Settings.Enabled then
-            if box.Visible then
-                box.Visible = false
-                if Names[plr] then Names[plr].Visible = false end
-                if HealthBars[plr] then
-                    if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-                    if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-                end
-                if HealthTexts[plr] then HealthTexts[plr].Visible = false end
-            end
-            continue
-        end
-
-        local char = plr.Character
-        if not char or not char.Parent then
-            -- Если персонажа нет - удаляем ESP
-            DestroyESP(plr)
-            continue
-        end
-
-        -- Получаем части персонажа
-        local hrp = char:FindFirstChild("HumanoidRootPart") or 
-                    char:FindFirstChild("Torso") or 
-                    char:FindFirstChild("UpperTorso")
-        local head = char:FindFirstChild("Head")
-        
-        if not hrp or not head then
-            if box.Visible then
-                box.Visible = false
-                if Names[plr] then Names[plr].Visible = false end
-                if HealthBars[plr] then
-                    if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-                    if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-                end
-                if HealthTexts[plr] then HealthTexts[plr].Visible = false end
-            end
-            continue
-        end
-
-        -- Проверка на врага
-        if not IsEnemy(plr) then
-            if box.Visible then
-                box.Visible = false
-                if Names[plr] then Names[plr].Visible = false end
-                if HealthBars[plr] then
-                    if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-                    if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-                end
-                if HealthTexts[plr] then HealthTexts[plr].Visible = false end
-            end
-            continue
-        end
-
-        -- Проверка на Humanoid
-        local humanoid = Humanoids[plr]
-        if not humanoid or not humanoid.Parent then
-            if not UpdateHumanoid(plr) then
-                if box.Visible then
-                    box.Visible = false
-                    if Names[plr] then Names[plr].Visible = false end
-                    if HealthBars[plr] then
-                        if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-                        if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-                    end
-                    if HealthTexts[plr] then HealthTexts[plr].Visible = false end
-                end
-                continue
-            end
-            humanoid = Humanoids[plr]
-        end
-
-        -- Получаем здоровье
-        local health, maxHealth = GetSafeHealthValues(humanoid)
-        if health <= 0 or maxHealth <= 0 then
-            if box.Visible then
-                box.Visible = false
-                if Names[plr] then Names[plr].Visible = false end
-                if HealthBars[plr] then
-                    if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-                    if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-                end
-                if HealthTexts[plr] then HealthTexts[plr].Visible = false end
-            end
-            continue
-        end
-
-        -- Получаем позиции на экране
-        local rootScreen = WorldToScreen(hrp.Position)
-        local headScreen = WorldToScreen(head.Position + Vector3.new(0, 0.5, 0))
-        local legScreen = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
-        
-        -- Проверяем видимость
-        local rootVisible = IsOnScreen(rootScreen)
-        local headVisible = IsOnScreen(headScreen)
-        local legVisible = IsOnScreen(legScreen)
-        
-        if not rootVisible and not headVisible and not legVisible then
-            if box.Visible then
-                box.Visible = false
-                if Names[plr] then Names[plr].Visible = false end
-                if HealthBars[plr] then
-                    if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-                    if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-                end
-                if HealthTexts[plr] then HealthTexts[plr].Visible = false end
-            end
-            continue
-        end
-
-        -- Проверка дистанции
-        local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
-        if distance > ESP.Settings.MaxRenderDistance then
-            if box.Visible then
-                box.Visible = false
-                if Names[plr] then Names[plr].Visible = false end
-                if HealthBars[plr] then
-                    if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-                    if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-                end
-                if HealthTexts[plr] then HealthTexts[plr].Visible = false end
-            end
-            continue
-        end
-
-        -- Используем доступные координаты
-        local finalRoot = rootVisible and rootScreen or (headVisible and headScreen or legScreen)
-        local finalHead = headVisible and headScreen or (rootVisible and rootScreen or legScreen)
-        local finalLeg = legVisible and legScreen or (rootVisible and rootScreen or headScreen)
-        
-        -- Корректируем Y координаты
-        if not headVisible and rootVisible then
-            finalHead.Y = finalRoot.Y - 50
-        end
-        if not legVisible and rootVisible then
-            finalLeg.Y = finalRoot.Y + 50
-        end
-        
-        -- Вычисляем размеры
-        local height = math.abs(finalHead.Y - finalLeg.Y)
-        local width = height * 0.55
-        
-        -- Защита от слишком маленьких размеров
-        if height < 10 or width < 5 then
-            if box.Visible then
-                box.Visible = false
-                if Names[plr] then Names[plr].Visible = false end
-                if HealthBars[plr] then
-                    if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
-                    if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
-                end
-                if HealthTexts[plr] then HealthTexts[plr].Visible = false end
-            end
-            continue
-        end
-
-        local healthPercent = health / maxHealth
-
-        -- Обновляем бокс
-        if ESP.Settings.EspBox then
-            box.Size = Vector2.new(width, height)
-            box.Position = Vector2.new(finalRoot.X - width/2, finalRoot.Y - height/2)
-            box.Color = ESP.Settings.BoxColor
-            box.Thickness = ESP.Settings.BoxThickness
-            box.Transparency = ESP.Settings.Transparency
-            if not box.Visible then box.Visible = true end
-        end
-
-        -- Обновляем имя
-        if ESP.Settings.EspName and Names[plr] then
-            Names[plr].Position = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
-            Names[plr].Color = ESP.Settings.NameColor
-            Names[plr].OutlineColor = ESP.Settings.OutlineColor
-            if not Names[plr].Visible then Names[plr].Visible = true end
-        end
-
-        -- Обновляем полоску здоровья
-        if ESP.Settings.EspHealthBar and HealthBars[plr] then
-            local barWidth = ESP.Settings.HealthBarWidth
-            local barHeight = height
-            local barX = finalRoot.X - width/2 - barWidth - 2
-            local barY = finalRoot.Y - height/2
-
-            local bg = HealthBars[plr].bg
-            local fill = HealthBars[plr].fill
-
-            if bg then
-                bg.Size = Vector2.new(barWidth, barHeight)
-                bg.Position = Vector2.new(barX, barY)
-                if not bg.Visible then bg.Visible = true end
-            end
-
-            if fill then
-                local fillHeight = barHeight * healthPercent
-                fillHeight = math.max(0, math.min(barHeight, fillHeight))
-                
-                fill.Color = GetHealthColor(healthPercent)
-                fill.Size = Vector2.new(barWidth, fillHeight)
-                fill.Position = Vector2.new(barX, barY + (barHeight - fillHeight))
-                if not fill.Visible then fill.Visible = true end
-            end
-        end
-
-        -- Обновляем текст здоровья
-        if ESP.Settings.EspHealthText and HealthTexts[plr] then
-            HealthTexts[plr].Color = GetHealthColor(healthPercent)
-            HealthTexts[plr].OutlineColor = ESP.Settings.OutlineColor
-            HealthTexts[plr].Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
-            HealthTexts[plr].Position = Vector2.new(finalRoot.X - width/2 - 35, finalRoot.Y)
-            if not HealthTexts[plr].Visible then HealthTexts[plr].Visible = true end
-        end
-    end
-end
-
--- Подключаем BindToRenderStep вместо RenderStepped
-local function StartRendering()
-    if RenderConnection then
-        RunService:UnbindFromRenderStep("ESPRender")
-    end
-    -- Используем приоритет чуть выше стандартного RenderStepped
-    RunService:BindToRenderStep("ESPRender", Enum.RenderPriority.Camera.Value + 1, OnRender)
-    DebugLog("Render bound with priority:", Enum.RenderPriority.Camera.Value + 1)
-end
-
-local function StopRendering()
-    if RenderConnection then
-        RunService:UnbindFromRenderStep("ESPRender")
-        RenderConnection = nil
-        DebugLog("Render unbound")
-    end
-end
-
--- Подключаем события
-Players.PlayerAdded:Connect(OnPlayerAdded)
-Players.PlayerRemoving:Connect(DestroyESP)
-
--- Обрабатываем уже существующих игроков
+-- Добавляем существующих игроков
 for _, plr in Players:GetPlayers() do
     if plr ~= LocalPlayer then
-        OnPlayerAdded(plr)
+        ESP:AddPlayer(plr)
     end
 end
 
--- Запускаем рендеринг
-StartRendering()
+-- Оптимизированный цикл обновления (как в чужом коде)
+local lastUpdate = 0
+local UPDATE_RATE = 1/30 -- 30 FPS
 
-DebugLog("ESP loaded - handles death and respawn properly")
-DebugLog("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
+RunService.Heartbeat:Connect(function()
+    local currentTime = tick()
+    if currentTime - lastUpdate < UPDATE_RATE then
+        return
+    end
+    lastUpdate = currentTime
+    
+    -- Обновляем всех игроков
+    for _, obj in pairs(ESP.Objects) do
+        obj:Update()
+    end
+end)
 
--- Добавляем функцию для переключения рендера (опционально)
-ESP.Stop = StopRendering
-ESP.Start = StartRendering
+print("ESP loaded with optimized architecture")
+print("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
 
 return ESP
