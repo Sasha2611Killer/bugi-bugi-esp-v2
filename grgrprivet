@@ -25,7 +25,7 @@ ESP.Settings = {
     ShowSelf = false,
     BoxThickness = 1.6,
     MaxRenderDistance = 1000,
-    UpdateRate = 30, -- Обновление 30 раз в секунду
+    UpdateRate = 30,
 }
 
 -- Внутренние переменные
@@ -38,51 +38,16 @@ local Connections = {}
 local PlayerData = {}
 local PlayerState = {}
 local PendingDestroy = {}
+local CharacterParts = {}
+
+-- Кэш для оптимизации
 local Cache = {
     ViewportSize = Vector2.new(0, 0),
     CameraPos = Vector3.new(0, 0, 0),
     IsEnabled = true,
-    UpdateInterval = 1/30,
 }
 
--- Кэшированные части тела для каждого игрока
-local CharacterParts = {}
-
--- Оптимизированная функция получения частей тела (с кэшированием)
-local function GetCachedParts(plr)
-    local cached = CharacterParts[plr]
-    local char = plr.Character
-    
-    if not char then return nil, nil end
-    
-    -- Если кэш устарел или персонаж изменился
-    if not cached or cached.Character ~= char then
-        local hrp = char:FindFirstChild("HumanoidRootPart") or 
-                    char:FindFirstChild("Torso") or 
-                    char:FindFirstChild("UpperTorso")
-        local head = char:FindFirstChild("Head")
-        
-        if hrp and head then
-            CharacterParts[plr] = {
-                Character = char,
-                HRP = hrp,
-                Head = head,
-                LastUpdate = tick(),
-            }
-            return hrp, head
-        end
-        return nil, nil
-    end
-    
-    return cached.HRP, cached.Head
-end
-
--- Очистка кэша при удалении персонажа
-local function ClearCachedParts(plr)
-    CharacterParts[plr] = nil
-end
-
--- Функция для проверки, враг ли игрок (оптимизирована)
+-- Функция для проверки, враг ли игрок
 local function IsEnemy(plr)
     if plr == LocalPlayer then 
         return ESP.Settings.ShowSelf
@@ -92,14 +57,13 @@ local function IsEnemy(plr)
     local theirChar = plr.Character
     if not myChar or not theirChar then return false end
 
-    -- Быстрая проверка через FindFirstChild (без pcalls)
     local myTeam = myChar.Parent and myChar.Parent.Name or "Enemy"
     local theirTeam = theirChar.Parent and theirChar.Parent.Name or "Enemy"
     
     return myTeam ~= theirTeam
 end
 
--- Получение Humanoid (оптимизировано)
+-- Получение Humanoid
 local function GetHumanoid(character)
     return character and character:FindFirstChildOfClass("Humanoid")
 end
@@ -108,7 +72,7 @@ end
 local function ClearPlayerData(plr)
     Humanoids[plr] = nil
     PlayerData[plr] = nil
-    ClearCachedParts(plr)
+    CharacterParts[plr] = nil
 end
 
 -- Очистка соединений
@@ -126,7 +90,7 @@ local function ClearConnections(plr, keepCharAdded)
     end
 end
 
--- Удаление ESP (оптимизировано)
+-- Удаление ESP
 local function DestroyESP(plr)
     local function safeRemove(obj)
         if obj then pcall(obj.Remove, obj) end
@@ -151,7 +115,7 @@ local function DestroyESP(plr)
     PlayerState[plr] = "dead"
 end
 
--- Создание ESP (оптимизировано)
+-- Создание ESP
 local function CreateESP(plr)
     if Boxes[plr] then return end
 
@@ -201,12 +165,12 @@ local function CreateESP(plr)
     PlayerState[plr] = "alive"
 end
 
--- Получение цвета здоровья (inline оптимизация)
+-- Цвета здоровья
 local HealthColors = {
-    [1] = Color3.fromRGB(0, 255, 0),   -- > 0.6
-    [2] = Color3.fromRGB(255, 255, 0), -- > 0.3
-    [3] = Color3.fromRGB(255, 100, 0), -- > 0.1
-    [4] = Color3.fromRGB(255, 0, 0),   -- <= 0.1
+    [1] = Color3.fromRGB(0, 255, 0),
+    [2] = Color3.fromRGB(255, 255, 0),
+    [3] = Color3.fromRGB(255, 100, 0),
+    [4] = Color3.fromRGB(255, 0, 0),
 }
 
 local function GetHealthColor(percent)
@@ -216,7 +180,7 @@ local function GetHealthColor(percent)
     else return HealthColors[4] end
 end
 
--- Получение здоровья (без pcalls где можно)
+-- Получение здоровья
 local function GetHealthValues(humanoid)
     if not humanoid then return 0, 100 end
     
@@ -229,7 +193,7 @@ local function GetHealthValues(humanoid)
     return health, maxHealth
 end
 
--- Конвертация 3D в 2D (оптимизирована)
+-- Конвертация 3D в 2D
 local function WorldToScreen(position)
     local success, result = pcall(Camera.WorldToViewportPoint, Camera, position)
     
@@ -243,19 +207,30 @@ local function WorldToScreen(position)
     end
     
     return {
-        X = -1,
-        Y = -1,
+        X = -1000,
+        Y = -1000,
         Z = -1,
         Visible = false
     }
 end
 
--- Проверка видимости (inline)
+-- ИСПРАВЛЕННАЯ ПРОВЕРКА ВИДИМОСТИ
 local function IsOnScreen(screenPos, viewportSize)
-    return screenPos.Visible and 
-           screenPos.Z > 0.1 and
-           screenPos.X >= 0 and screenPos.X <= viewportSize.X and
-           screenPos.Y >= 0 and screenPos.Y <= viewportSize.Y
+    -- Проверяем что точка перед камерой
+    if not screenPos.Visible or screenPos.Z <= 0.1 then
+        return false
+    end
+    
+    -- Проверяем что точка в пределах экрана (без запаса)
+    if screenPos.X < 0 or screenPos.X > viewportSize.X then
+        return false
+    end
+    
+    if screenPos.Y < 0 or screenPos.Y > viewportSize.Y then
+        return false
+    end
+    
+    return true
 end
 
 -- Обновление Humanoid
@@ -281,7 +256,7 @@ end
 local function OnCharacterAdded(plr, char)
     CreateESP(plr)
     ClearConnections(plr, true)
-    ClearCachedParts(plr)
+    CharacterParts[plr] = nil
     
     local humanoid = GetHumanoid(char)
     if humanoid then
@@ -321,25 +296,25 @@ local function OnPlayerAdded(plr)
     end
 end
 
--- ОПТИМИЗИРОВАННЫЙ ЦИКЛ с Heartbeat и ограничением FPS
+-- Основной цикл
 local lastUpdate = 0
-local updateInterval = 1/30 -- 30 FPS для ESP
+local updateInterval = 1/30
 
 RunService.Heartbeat:Connect(function()
     local currentTime = tick()
     
-    -- Ограничиваем частоту обновления
+    -- Ограничиваем частоту
     if currentTime - lastUpdate < updateInterval then
         return
     end
     lastUpdate = currentTime
     
-    -- Кэшируем часто используемые значения
+    -- Кэшируем значения
     Cache.ViewportSize = Camera.ViewportSize
     Cache.CameraPos = Camera.CFrame.Position
     Cache.IsEnabled = ESP.Settings.Enabled
     
-    -- Обрабатываем удаление
+    -- Удаляем помеченных
     for plr in pairs(PendingDestroy) do
         DestroyESP(plr)
         PendingDestroy[plr] = nil
@@ -349,7 +324,7 @@ RunService.Heartbeat:Connect(function()
     for plr, box in pairs(Boxes) do
         if plr == LocalPlayer then continue end
         
-        -- Быстрые проверки
+        -- Проверка состояния
         if PlayerState[plr] ~= "alive" or not Cache.IsEnabled then
             if box.Visible then
                 box.Visible = false
@@ -363,15 +338,27 @@ RunService.Heartbeat:Connect(function()
             continue
         end
         
-        -- Получаем кэшированные части тела
-        local hrp, head = GetCachedParts(plr)
+        -- Получаем персонажа
+        local char = plr.Character
+        if not char or not char.Parent then
+            if box.Visible then box.Visible = false end
+            continue
+        end
+        
+        -- Получаем части тела
+        local hrp = char:FindFirstChild("HumanoidRootPart") or 
+                    char:FindFirstChild("Torso") or 
+                    char:FindFirstChild("UpperTorso")
+        local head = char:FindFirstChild("Head")
+        
         if not hrp or not head then
             if box.Visible then box.Visible = false end
             continue
         end
         
-        -- Проверка дистанции (быстрая)
-        if (Cache.CameraPos - hrp.Position).Magnitude > ESP.Settings.MaxRenderDistance then
+        -- Проверка дистанции
+        local distance = (Cache.CameraPos - hrp.Position).Magnitude
+        if distance > ESP.Settings.MaxRenderDistance then
             if box.Visible then box.Visible = false end
             continue
         end
@@ -379,6 +366,30 @@ RunService.Heartbeat:Connect(function()
         -- Проверка на врага
         if not IsEnemy(plr) then
             if box.Visible then box.Visible = false end
+            continue
+        end
+        
+        -- Получаем позиции на экране
+        local rootScreen = WorldToScreen(hrp.Position)
+        local headScreen = WorldToScreen(head.Position + Vector3.new(0, 0.5, 0))
+        local legScreen = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
+        
+        -- СТРОГАЯ ПРОВЕРКА ВИДИМОСТИ
+        local rootVisible = IsOnScreen(rootScreen, Cache.ViewportSize)
+        local headVisible = IsOnScreen(headScreen, Cache.ViewportSize)
+        local legVisible = IsOnScreen(legScreen, Cache.ViewportSize)
+        
+        -- Если ни одна точка не видна на экране - прячем ESP
+        if not rootVisible and not headVisible and not legVisible then
+            if box.Visible then
+                box.Visible = false
+                if Names[plr] then Names[plr].Visible = false end
+                if HealthBars[plr] then
+                    if HealthBars[plr].bg then HealthBars[plr].bg.Visible = false end
+                    if HealthBars[plr].fill then HealthBars[plr].fill.Visible = false end
+                end
+                if HealthTexts[plr] then HealthTexts[plr].Visible = false end
+            end
             continue
         end
         
@@ -399,22 +410,7 @@ RunService.Heartbeat:Connect(function()
             continue
         end
         
-        -- Конвертируем позиции
-        local rootScreen = WorldToScreen(hrp.Position)
-        local headScreen = WorldToScreen(head.Position + Vector3.new(0, 0.5, 0))
-        local legScreen = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
-        
-        -- Проверяем видимость
-        local rootVisible = IsOnScreen(rootScreen, Cache.ViewportSize)
-        local headVisible = IsOnScreen(headScreen, Cache.ViewportSize)
-        local legVisible = IsOnScreen(legScreen, Cache.ViewportSize)
-        
-        if not rootVisible and not headVisible and not legVisible then
-            if box.Visible then box.Visible = false end
-            continue
-        end
-        
-        -- Вычисляем позиции
+        -- Используем доступные координаты
         local finalRoot = rootVisible and rootScreen or (headVisible and headScreen or legScreen)
         local finalHead = headVisible and headScreen or (rootVisible and rootScreen or legScreen)
         local finalLeg = legVisible and legScreen or (rootVisible and rootScreen or headScreen)
@@ -431,6 +427,7 @@ RunService.Heartbeat:Connect(function()
         local height = math.abs(finalHead.Y - finalLeg.Y)
         local width = height * 0.55
         
+        -- Защита от слишком маленьких размеров
         if height < 10 or width < 5 then
             if box.Visible then box.Visible = false end
             continue
@@ -481,15 +478,9 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
--- Очистка при выходе
-local function OnPlayerRemoving(plr)
-    DestroyESP(plr)
-    ClearCachedParts(plr)
-end
-
 -- Подключаем события
 Players.PlayerAdded:Connect(OnPlayerAdded)
-Players.PlayerRemoving:Connect(OnPlayerRemoving)
+Players.PlayerRemoving:Connect(DestroyESP)
 
 -- Обрабатываем существующих игроков
 for _, plr in Players:GetPlayers() do
@@ -498,7 +489,7 @@ for _, plr in Players:GetPlayers() do
     end
 end
 
-print("ESP loaded - Optimized with Heartbeat (30 FPS)")
+print("ESP loaded - Strict visibility check")
 print("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
 
 return ESP
