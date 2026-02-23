@@ -25,13 +25,21 @@ ESP.Settings = {
     ShowSelf = false,
     BoxThickness = 1.6,
     MaxRenderDistance = 1000,
+    Debug = true,
 }
 
 -- Внутренние переменные
-ESP.Objects = {} -- Все объекты ESP
-ESP.Overrides = {} -- Для кастомных функций (как в чужом коде)
+ESP.Objects = {}
+ESP.Overrides = {}
 
--- Вспомогательные функции (аналог Framework)
+-- Для отладки
+local function DebugLog(...)
+    if ESP.Settings.Debug then
+        print("[ESP]", ...)
+    end
+end
+
+-- Вспомогательные функции
 local function WorldToScreen(position)
     local success, result = pcall(function()
         return Camera:WorldToViewportPoint(position)
@@ -49,9 +57,16 @@ local function WorldToScreen(position)
 end
 
 local function IsOnScreen(screenPos)
-    return screenPos.OnScreen and 
-           screenPos.X >= 0 and screenPos.X <= Camera.ViewportSize.X and
-           screenPos.Y >= 0 and screenPos.Y <= Camera.ViewportSize.Y
+    if not screenPos.OnScreen or screenPos.Z <= 0.1 then
+        return false
+    end
+    if screenPos.X < 0 or screenPos.X > Camera.ViewportSize.X then
+        return false
+    end
+    if screenPos.Y < 0 or screenPos.Y > Camera.ViewportSize.Y then
+        return false
+    end
+    return true
 end
 
 local function GetHealthColor(percent)
@@ -67,7 +82,7 @@ local function GetHealthColor(percent)
     end
 end
 
--- Функции для получения данных (с поддержкой Overrides)
+-- Функции для получения данных
 function ESP:GetCharacter(plr)
     if self.Overrides.GetCharacter then
         return self.Overrides.GetCharacter(plr)
@@ -114,14 +129,18 @@ function ESP:IsEnemy(plr)
     end
 end
 
--- Метатаблица для игроков (как в чужом коде)
+-- Метатаблица для игроков
 local PlayerMetatable = {}
 PlayerMetatable.__index = PlayerMetatable
 
 function PlayerMetatable:Destroy()
+    DebugLog("Destroying ESP for", self.Player.Name)
     for name, component in pairs(self.Components) do
         if component then
-            pcall(function() component:Remove() end)
+            pcall(function() 
+                component:Remove()
+                component = nil
+            end)
         end
     end
     self.Components = {}
@@ -129,21 +148,28 @@ function PlayerMetatable:Destroy()
 end
 
 function PlayerMetatable:CreateComponents()
+    DebugLog("Creating components for", self.Player.Name)
     local c = {}
     
     -- Box
     c.Box = Drawing.new("Square")
     c.Box.Thickness = ESP.Settings.BoxThickness
     c.Box.Filled = false
+    c.Box.Color = ESP.Settings.BoxColor
+    c.Box.Transparency = ESP.Settings.Transparency
     c.Box.Visible = false
+    DebugLog("Box created for", self.Player.Name)
     
     -- Name
     c.Name = Drawing.new("Text")
     c.Name.Text = self.Player.Name
     c.Name.Size = 16
+    c.Name.Color = ESP.Settings.NameColor
     c.Name.Center = true
     c.Name.Outline = true
+    c.Name.OutlineColor = ESP.Settings.OutlineColor
     c.Name.Visible = false
+    DebugLog("Name created for", self.Player.Name)
     
     -- Health Bar Background
     c.HealthBarBg = Drawing.new("Square")
@@ -157,36 +183,54 @@ function PlayerMetatable:CreateComponents()
     c.HealthBarFill = Drawing.new("Square")
     c.HealthBarFill.Thickness = 1
     c.HealthBarFill.Filled = true
+    c.HealthBarFill.Color = Color3.fromRGB(0, 255, 0)
+    c.HealthBarFill.Transparency = 0.7
     c.HealthBarFill.Visible = false
+    DebugLog("HealthBar created for", self.Player.Name)
     
     -- Health Text
     c.HealthText = Drawing.new("Text")
     c.HealthText.Size = 14
+    c.HealthText.Color = Color3.fromRGB(255, 255, 255)
     c.HealthText.Center = true
     c.HealthText.Outline = true
+    c.HealthText.OutlineColor = ESP.Settings.OutlineColor
     c.HealthText.Visible = false
+    DebugLog("HealthText created for", self.Player.Name)
     
     self.Components = c
+    DebugLog("All components created for", self.Player.Name)
 end
 
 function PlayerMetatable:Update()
     local c = self.Components
-    if not c then return end
+    if not c then 
+        DebugLog("No components for", self.Player.Name)
+        return 
+    end
     
     -- Проверка настроек
     if not ESP.Settings.Enabled then
-        c.Box.Visible = false
-        c.Name.Visible = false
-        c.HealthBarBg.Visible = false
-        c.HealthBarFill.Visible = false
-        c.HealthText.Visible = false
+        if c.Box.Visible then
+            c.Box.Visible = false
+            c.Name.Visible = false
+            c.HealthBarBg.Visible = false
+            c.HealthBarFill.Visible = false
+            c.HealthText.Visible = false
+        end
         return
     end
     
     -- Получаем персонажа
     local char = ESP:GetCharacter(self.Player)
     if not char or not char.Parent then
-        self:Destroy()
+        if c.Box.Visible then
+            c.Box.Visible = false
+            c.Name.Visible = false
+            c.HealthBarBg.Visible = false
+            c.HealthBarFill.Visible = false
+            c.HealthText.Visible = false
+        end
         return
     end
     
@@ -197,32 +241,38 @@ function PlayerMetatable:Update()
     local head = char:FindFirstChild("Head")
     
     if not hrp or not head then
-        c.Box.Visible = false
-        c.Name.Visible = false
-        c.HealthBarBg.Visible = false
-        c.HealthBarFill.Visible = false
-        c.HealthText.Visible = false
+        if c.Box.Visible then
+            c.Box.Visible = false
+            c.Name.Visible = false
+            c.HealthBarBg.Visible = false
+            c.HealthBarFill.Visible = false
+            c.HealthText.Visible = false
+        end
         return
     end
     
     -- Проверка на врага
     if not ESP:IsEnemy(self.Player) then
-        c.Box.Visible = false
-        c.Name.Visible = false
-        c.HealthBarBg.Visible = false
-        c.HealthBarFill.Visible = false
-        c.HealthText.Visible = false
+        if c.Box.Visible then
+            c.Box.Visible = false
+            c.Name.Visible = false
+            c.HealthBarBg.Visible = false
+            c.HealthBarFill.Visible = false
+            c.HealthText.Visible = false
+        end
         return
     end
     
     -- Получаем Humanoid
     local humanoid = ESP:GetHumanoid(char)
     if not humanoid or humanoid.Health <= 0 then
-        c.Box.Visible = false
-        c.Name.Visible = false
-        c.HealthBarBg.Visible = false
-        c.HealthBarFill.Visible = false
-        c.HealthText.Visible = false
+        if c.Box.Visible then
+            c.Box.Visible = false
+            c.Name.Visible = false
+            c.HealthBarBg.Visible = false
+            c.HealthBarFill.Visible = false
+            c.HealthText.Visible = false
+        end
         return
     end
     
@@ -237,22 +287,26 @@ function PlayerMetatable:Update()
     local legVisible = IsOnScreen(legPos)
     
     if not rootVisible and not headVisible and not legVisible then
-        c.Box.Visible = false
-        c.Name.Visible = false
-        c.HealthBarBg.Visible = false
-        c.HealthBarFill.Visible = false
-        c.HealthText.Visible = false
+        if c.Box.Visible then
+            c.Box.Visible = false
+            c.Name.Visible = false
+            c.HealthBarBg.Visible = false
+            c.HealthBarFill.Visible = false
+            c.HealthText.Visible = false
+        end
         return
     end
     
     -- Проверка дистанции
     local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
     if distance > ESP.Settings.MaxRenderDistance then
-        c.Box.Visible = false
-        c.Name.Visible = false
-        c.HealthBarBg.Visible = false
-        c.HealthBarFill.Visible = false
-        c.HealthText.Visible = false
+        if c.Box.Visible then
+            c.Box.Visible = false
+            c.Name.Visible = false
+            c.HealthBarBg.Visible = false
+            c.HealthBarFill.Visible = false
+            c.HealthText.Visible = false
+        end
         return
     end
     
@@ -274,11 +328,13 @@ function PlayerMetatable:Update()
     local width = height * 0.55
     
     if height < 10 or width < 5 then
-        c.Box.Visible = false
-        c.Name.Visible = false
-        c.HealthBarBg.Visible = false
-        c.HealthBarFill.Visible = false
-        c.HealthText.Visible = false
+        if c.Box.Visible then
+            c.Box.Visible = false
+            c.Name.Visible = false
+            c.HealthBarBg.Visible = false
+            c.HealthBarFill.Visible = false
+            c.HealthText.Visible = false
+        end
         return
     end
     
@@ -294,8 +350,11 @@ function PlayerMetatable:Update()
         c.Box.Color = ESP.Settings.BoxColor
         c.Box.Thickness = ESP.Settings.BoxThickness
         c.Box.Transparency = ESP.Settings.Transparency
-        c.Box.Visible = true
-    else
+        if not c.Box.Visible then 
+            c.Box.Visible = true
+            DebugLog("Box now visible for", self.Player.Name)
+        end
+    elseif c.Box.Visible then
         c.Box.Visible = false
     end
     
@@ -304,8 +363,11 @@ function PlayerMetatable:Update()
         c.Name.Position = Vector2.new(finalRoot.X, finalRoot.Y - height/2 - 20)
         c.Name.Color = ESP.Settings.NameColor
         c.Name.OutlineColor = ESP.Settings.OutlineColor
-        c.Name.Visible = true
-    else
+        if not c.Name.Visible then 
+            c.Name.Visible = true
+            DebugLog("Name now visible for", self.Player.Name)
+        end
+    elseif c.Name.Visible then
         c.Name.Visible = false
     end
     
@@ -318,17 +380,22 @@ function PlayerMetatable:Update()
         -- Background
         c.HealthBarBg.Size = Vector2.new(barWidth, height)
         c.HealthBarBg.Position = Vector2.new(barX, barY)
-        c.HealthBarBg.Visible = true
+        if not c.HealthBarBg.Visible then 
+            c.HealthBarBg.Visible = true
+        end
         
         -- Fill
         local fillHeight = height * healthPercent
         c.HealthBarFill.Size = Vector2.new(barWidth, fillHeight)
         c.HealthBarFill.Position = Vector2.new(barX, barY + (height - fillHeight))
         c.HealthBarFill.Color = healthColor
-        c.HealthBarFill.Visible = true
+        if not c.HealthBarFill.Visible then 
+            c.HealthBarFill.Visible = true
+            DebugLog("HealthBar now visible for", self.Player.Name)
+        end
     else
-        c.HealthBarBg.Visible = false
-        c.HealthBarFill.Visible = false
+        if c.HealthBarBg.Visible then c.HealthBarBg.Visible = false end
+        if c.HealthBarFill.Visible then c.HealthBarFill.Visible = false end
     end
     
     -- Обновляем HealthText
@@ -337,16 +404,26 @@ function PlayerMetatable:Update()
         c.HealthText.OutlineColor = ESP.Settings.OutlineColor
         c.HealthText.Text = string.format("%d/%d", math.floor(health), math.floor(maxHealth))
         c.HealthText.Position = Vector2.new(finalRoot.X - width/2 - 35, finalRoot.Y)
-        c.HealthText.Visible = true
-    else
+        if not c.HealthText.Visible then 
+            c.HealthText.Visible = true
+            DebugLog("HealthText now visible for", self.Player.Name)
+        end
+    elseif c.HealthText.Visible then
         c.HealthText.Visible = false
     end
 end
 
 -- Функция создания ESP для игрока
 function ESP:AddPlayer(plr)
-    if plr == LocalPlayer then return end
+    if plr == LocalPlayer then 
+        DebugLog("Skipping local player")
+        return 
+    end
+    
+    DebugLog("Adding player:", plr.Name)
+    
     if self.Objects[plr] then 
+        DebugLog("Player already exists, destroying old:", plr.Name)
         self.Objects[plr]:Destroy()
     end
     
@@ -357,15 +434,17 @@ function ESP:AddPlayer(plr)
     
     obj:CreateComponents()
     self.Objects[plr] = obj
+    DebugLog("Player added:", plr.Name)
     
-    -- Отслеживаем死亡 и респавн
+    -- Отслеживаем смерть и респавн
     local function onCharacterAdded(char)
-        -- Пересоздаем компоненты при респавне
+        DebugLog("Character added for", plr.Name)
         obj:Destroy()
         obj:CreateComponents()
     end
     
     local function onCharacterRemoving()
+        DebugLog("Character removing for", plr.Name)
         obj:Destroy()
     end
     
@@ -382,6 +461,7 @@ function ESP:AddPlayer(plr)
     }
     
     if plr.Character then
+        DebugLog("Player already has character:", plr.Name)
         onCharacterAdded(plr.Character)
     end
 end
@@ -392,21 +472,24 @@ Players.PlayerAdded:Connect(function(plr)
 end)
 
 Players.PlayerRemoving:Connect(function(plr)
+    DebugLog("Player removing:", plr.Name)
     if ESP.Objects[plr] then
         ESP.Objects[plr]:Destroy()
     end
 end)
 
 -- Добавляем существующих игроков
+DebugLog("Adding existing players...")
 for _, plr in Players:GetPlayers() do
     if plr ~= LocalPlayer then
         ESP:AddPlayer(plr)
     end
 end
 
--- Оптимизированный цикл обновления (как в чужом коде)
+-- Оптимизированный цикл обновления
 local lastUpdate = 0
 local UPDATE_RATE = 1/30 -- 30 FPS
+local frameCount = 0
 
 RunService.Heartbeat:Connect(function()
     local currentTime = tick()
@@ -414,14 +497,28 @@ RunService.Heartbeat:Connect(function()
         return
     end
     lastUpdate = currentTime
+    frameCount = frameCount + 1
     
     -- Обновляем всех игроков
+    local count = 0
     for _, obj in pairs(ESP.Objects) do
         obj:Update()
+        count = count + 1
+    end
+    
+    if frameCount % 30 == 0 then -- Логируем каждые 30 кадров
+        DebugLog("Updating", count, "players")
     end
 end)
 
+print("=" .. string.rep("=", 50))
 print("ESP loaded with optimized architecture")
+print("Settings Enabled:", ESP.Settings.Enabled)
+print("Show Enemies:", ESP.Settings.ShowEnemies)
+print("Show Teammates:", ESP.Settings.ShowTeammates)
 print("Current CameraMode:", LocalPlayer and LocalPlayer.CameraMode)
+print("Players in game:", #Players:GetPlayers())
+print("ESP Objects:", table.count(ESP.Objects))
+print("=" .. string.rep("=", 50))
 
 return ESP
