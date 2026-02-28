@@ -36,6 +36,7 @@ local ESP = {
     -- Внутренние таблицы
     Objects = {},  -- объекты ESP
     Connections = {},  -- соединения
+    PendingCreation = {}, -- игроки в очереди на создание
 }
 
 -- Хранилище для плавности
@@ -59,6 +60,7 @@ local function ClearAllESP()
     -- Очищаем таблицы
     ESP.Objects = {}
     LastSizes = {}
+    ESP.PendingCreation = {}
 end
 
 -- Цвет здоровья
@@ -117,8 +119,18 @@ local function IsCharacterReady(char)
     return hrp and head and humanoid and humanoid.Health > 0
 end
 
--- Создание ESP для игрока
+-- Создание ESP для игрока (обновленная версия)
 local function CreateESP(plr)
+    -- НЕ создаем ESP если он выключен глобально
+    if not ESP.Enabled then
+        -- Добавляем в очередь на создание, чтобы создать позже при включении
+        ESP.PendingCreation[plr] = true
+        return
+    end
+    
+    -- Убираем из очереди если был там
+    ESP.PendingCreation[plr] = nil
+    
     if ESP.Objects[plr] then return end
     
     -- Проверяем есть ли персонаж и готов ли он
@@ -130,6 +142,14 @@ local function CreateESP(plr)
             while timeout < 30 do -- ждем максимум 30 секунд
                 task.wait(0.5)
                 timeout = timeout + 0.5
+                
+                -- Проверяем при каждой попытке, включен ли ESP
+                if not ESP.Enabled then
+                    -- Если ESP выключили, добавляем в очередь
+                    ESP.PendingCreation[plr] = true
+                    break
+                end
+                
                 char = plr.Character
                 if IsCharacterReady(char) then
                     CreateESP(plr)  -- рекурсивный вызов когда готов
@@ -148,7 +168,7 @@ local function CreateESP(plr)
     objects.Box.Filled = false
     objects.Box.Color = ESP.BoxColor
     objects.Box.Transparency = 1
-    objects.Box.Visible = false
+    objects.Box.Visible = false  -- Всегда начинаем с невидимого
     
     -- Name
     objects.Name = Drawing.new("Text")
@@ -212,6 +232,7 @@ local function RemoveESP(plr)
         ESP.Objects[plr] = nil
     end
     LastSizes[plr] = nil
+    ESP.PendingCreation[plr] = nil
 end
 
 -- Конвертация 3D в 2D
@@ -227,18 +248,39 @@ local function IsOnScreen(x, y, z)
            y >= 0 and y <= Cache.ViewportSize.Y
 end
 
--- ОСНОВНОЙ ЦИКЛ (читает настройки каждый кадр - как в Kiriot)
+-- Функция для создания ESP для всех ожидающих игроков
+local function CreatePendingESP()
+    if not ESP.Enabled then return end
+    
+    for plr, _ in pairs(ESP.PendingCreation) do
+        if plr and plr.Parent then  -- Проверяем что игрок все еще существует
+            CreateESP(plr)
+        else
+            ESP.PendingCreation[plr] = nil
+        end
+    end
+end
+
+-- ОСНОВНОЙ ЦИКЛ (обновленная версия)
 RunService.RenderStepped:Connect(function()
     -- Кэшируем часто используемые значения
     Cache.ViewportSize = Camera.ViewportSize
     Cache.CameraPos = Camera.CFrame.Position
     
-    -- Проверяем включен ли ESP (читаем каждый кадр)
+    -- Проверяем включен ли ESP
     if not ESP.Enabled then
-        -- Если ESP выключен - ПОЛНОСТЬЮ УДАЛЯЕМ все объекты
-        ClearAllESP()
+        -- Если ESP выключен - скрываем все объекты
+        -- (объекты не удаляем, чтобы не создавать заново при включении)
+        for plr, objs in pairs(ESP.Objects) do
+            for _, obj in pairs(objs) do
+                obj.Visible = false
+            end
+        end
         return
     end
+    
+    -- Создаем ESP для ожидающих игроков
+    CreatePendingESP()
     
     -- Основной цикл отрисовки
     for plr, objs in pairs(ESP.Objects) do
@@ -258,14 +300,14 @@ RunService.RenderStepped:Connect(function()
             continue
         end
         
-        -- Проверка дистанции (читаем каждый кадр)
+        -- Проверка дистанции
         local distance = (Cache.CameraPos - hrp.Position).Magnitude
         if distance > ESP.MaxDistance then
             for _, obj in pairs(objs) do obj.Visible = false end
             continue
         end
         
-        -- Проверка врага (читаем каждый кадр)
+        -- Проверка врага
         if not IsEnemy(plr) then
             for _, obj in pairs(objs) do obj.Visible = false end
             continue
@@ -301,7 +343,7 @@ RunService.RenderStepped:Connect(function()
         local healthPercent = health / maxHealth
         local healthColor = GetHealthColor(healthPercent)
         
-        -- Обновляем Box (с ТЕКУЩИМИ настройками)
+        -- Обновляем Box
         if ESP.BoxEnabled then
             objs.Box.Position = Vector2.new(finalRootX - width/2, finalRootY - height/2)
             
@@ -316,7 +358,6 @@ RunService.RenderStepped:Connect(function()
                 LastSizes[plr] = Vector2.new(width, height)
             end
             
-            -- Применяем текущие настройки
             objs.Box.Color = ESP.BoxColor
             objs.Box.Thickness = ESP.BoxThickness
             objs.Box.Visible = true
@@ -324,7 +365,7 @@ RunService.RenderStepped:Connect(function()
             objs.Box.Visible = false
         end
         
-        -- Обновляем Name (с ТЕКУЩИМИ настройками)
+        -- Обновляем Name
         if ESP.NameEnabled then
             objs.Name.Position = Vector2.new(finalRootX, finalRootY - height/2 - 20)
             objs.Name.Color = ESP.NameColor
@@ -335,7 +376,7 @@ RunService.RenderStepped:Connect(function()
             objs.Name.Visible = false
         end
         
-        -- Обновляем Distance (с ТЕКУЩИМИ настройками)
+        -- Обновляем Distance
         if ESP.DistanceEnabled then
             local distMeters = GetDistance(hrp.Position)
             objs.Distance.Text = distMeters .. "m"
@@ -348,7 +389,7 @@ RunService.RenderStepped:Connect(function()
             objs.Distance.Visible = false
         end
         
-        -- Обновляем Health Bar (с ТЕКУЩИМИ настройками)
+        -- Обновляем Health Bar
         if ESP.HealthEnabled then
             local barWidth = ESP.HealthBarWidth
             local barX = finalRootX - width/2 - barWidth - 2
@@ -370,7 +411,7 @@ RunService.RenderStepped:Connect(function()
             objs.HealthBarFill.Visible = false
         end
         
-        -- Обновляем Health Text (с ТЕКУЩИМИ настройками)
+        -- Обновляем Health Text
         if ESP.HealthTextEnabled then
             objs.HealthText.Color = healthColor
             objs.HealthText.OutlineColor = ESP.OutlineColor
@@ -386,7 +427,13 @@ end)
 -- Отслеживаем смерть/респавн
 local function OnCharacterAdded(plr)
     RemoveESP(plr)
-    CreateESP(plr)
+    -- Если ESP включен, создаем новый
+    if ESP.Enabled then
+        CreateESP(plr)
+    else
+        -- Иначе добавляем в очередь
+        ESP.PendingCreation[plr] = true
+    end
 end
 
 -- Функция для создания ESP для всех существующих игроков
@@ -394,8 +441,12 @@ local function SetupAllPlayers()
     print("Setting up ESP for all players...")
     for _, plr in pairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer then
-            -- Создаем ESP для игрока
-            CreateESP(plr)
+            -- Создаем ESP для игрока если включен, иначе в очередь
+            if ESP.Enabled then
+                CreateESP(plr)
+            else
+                ESP.PendingCreation[plr] = true
+            end
             
             -- Сохраняем соединения если их еще нет
             if not ESP.Connections[plr] then
@@ -412,7 +463,11 @@ end
 Players.PlayerAdded:Connect(function(plr)
     if plr == LocalPlayer then return end
     
-    CreateESP(plr)
+    if ESP.Enabled then
+        CreateESP(plr)
+    else
+        ESP.PendingCreation[plr] = true
+    end
     
     ESP.Connections[plr] = {
         plr.CharacterAdded:Connect(function() OnCharacterAdded(plr) end),
@@ -442,8 +497,9 @@ task.spawn(function()
 end)
 
 print("ESP loaded - можно менять настройки через ESP.Enabled, ESP.BoxEnabled и т.д.")
-print("При ESP.Enabled = false все объекты полностью удаляются из памяти")
+print("При ESP.Enabled = false все объекты скрываются, но не удаляются")
+print("При ESP.Enabled = true объекты появляются мгновенно")
 print("Текущие игроки:", #Players:GetPlayers() - 1)
 
--- ВОЗВРАЩАЕМ ТАБЛИЦУ (как в Kiriot)
+-- ВОЗВРАЩАЕМ ТАБЛИЦУ
 return ESP
